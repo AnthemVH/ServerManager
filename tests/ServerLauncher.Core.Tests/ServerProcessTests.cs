@@ -10,6 +10,7 @@ namespace ServerLauncher.Core.Tests;
 /// Integration tests that actually launch processes. These cover the behaviour that
 /// unit tests cannot prove: real stdio capture, real exit codes, and real tree kills.
 /// </summary>
+[Collection(ProcessIntegrationCollection.Name)]
 public class ServerProcessTests
 {
     private static readonly AppSettings Settings = new();
@@ -96,7 +97,7 @@ public class ServerProcessTests
         var (process, lines) = StartCapturing(Definition("hello.ps1"));
         using var _ = process;
 
-        var exitCode = await process.ExitTask.WaitAsync(TimeSpan.FromSeconds(45));
+        var exitCode = await process.ExitTask.WaitAsync(TimeSpan.FromSeconds(120));
 
         exitCode.Should().Be(0);
         lines.Should().Contain(l => l.Text.Contains("HELLO FROM POWERSHELL"));

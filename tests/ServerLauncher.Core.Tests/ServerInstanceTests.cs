@@ -9,6 +9,7 @@ namespace ServerLauncher.Core.Tests;
 /// End-to-end supervision tests: real processes, real crashes, real restarts.
 /// Each test gets a temporary log directory so nothing lands in the user's app data.
 /// </summary>
+[Collection(ProcessIntegrationCollection.Name)]
 public sealed class ServerInstanceTests : IDisposable
 {
     private readonly string _tempRoot = Path.Combine(

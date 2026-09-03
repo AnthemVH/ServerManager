@@ -306,3 +306,49 @@ public sealed class UpdateInstallerTests : IDisposable
         }
     }
 }
+
+/// <summary>
+/// Parses the JSON GitHub actually returned for the v1.0.0 release built by the release
+/// workflow. The hand-written samples above prove the parser handles the shapes we expect;
+/// this proves the workflow really produces one of them — a renamed asset or a retagged
+/// release would break updates silently, and this fails instead.
+/// </summary>
+public class RealReleasePayloadTests
+{
+    private static JsonElement RealPayload()
+    {
+        var path = Path.Combine(AppContext.BaseDirectory, "fixtures", "real-release.json");
+        return JsonDocument.Parse(File.ReadAllText(path)).RootElement;
+    }
+
+    [Fact]
+    public void TheReleaseWorkflowProducesAPayloadTheAppCanParse()
+    {
+        var release = UpdateService.ParseRelease(RealPayload());
+
+        release.Should().NotBeNull("the published release must be installable by the app");
+        release!.Version.Should().Be(new Version(1, 0, 0));
+        release.DownloadUrl.Should().EndWith(UpdateService.AssetName);
+        release.ChecksumUrl.Should().EndWith(UpdateService.ChecksumAssetName,
+            "without the checksum the download cannot be verified");
+        release.SizeBytes.Should().BeGreaterThan(0);
+    }
+
+    [Fact]
+    public void AnIdenticalVersionIsNotOfferedAsAnUpdate()
+    {
+        // A copy installed from this very release must report "up to date" rather than
+        // offering to reinstall itself in a loop.
+        var release = UpdateService.ParseRelease(RealPayload())!;
+
+        UpdateService.IsNewer(release.Version, new Version(1, 0, 0, 0)).Should().BeFalse();
+    }
+
+    [Fact]
+    public void AnOlderInstalledBuildIsOfferedTheRelease()
+    {
+        var release = UpdateService.ParseRelease(RealPayload())!;
+
+        UpdateService.IsNewer(release.Version, new Version(0, 9, 0)).Should().BeTrue();
+    }
+}
