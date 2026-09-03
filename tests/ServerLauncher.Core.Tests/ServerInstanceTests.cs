@@ -44,6 +44,36 @@ public sealed class ServerInstanceTests : IDisposable
         return condition();
     }
 
+    /// <summary>
+    /// Reads the day's log, tolerating the file not existing yet and the writer holding
+    /// it open mid-append.
+    /// </summary>
+    private static string ReadLogTolerantly(string logDirectory)
+    {
+        try
+        {
+            if (!Directory.Exists(logDirectory))
+            {
+                return string.Empty;
+            }
+
+            var files = Directory.GetFiles(logDirectory, "*.log");
+            if (files.Length == 0)
+            {
+                return string.Empty;
+            }
+
+            using var stream = new FileStream(
+                files[0], FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            using var reader = new StreamReader(stream);
+            return reader.ReadToEnd();
+        }
+        catch (IOException)
+        {
+            return string.Empty;
+        }
+    }
+
     [Fact]
     public async Task StartingAndStopping_MovesThroughTheExpectedStates()
     {
@@ -247,14 +277,14 @@ public sealed class ServerInstanceTests : IDisposable
 
         var logDir = Path.Combine(_tempRoot, definition.Id.ToString("N"));
 
+        // The writer batches on a background worker, so the file appearing does not mean
+        // the line is in it yet. Wait for the content itself rather than the file.
         var written = await WaitUntilAsync(
-            () => Directory.Exists(logDir) && Directory.GetFiles(logDir, "*.log").Length > 0,
-            TimeSpan.FromSeconds(10));
+            () => ReadLogTolerantly(logDir).Contains("LINE 1", StringComparison.Ordinal),
+            TimeSpan.FromSeconds(20));
 
         written.Should().BeTrue("console history must survive past the in-memory ring buffer");
-
-        var contents = File.ReadAllText(Directory.GetFiles(logDir, "*.log")[0]);
-        contents.Should().Contain("LINE 1");
+        ReadLogTolerantly(logDir).Should().Contain("LINE 200", "the whole run should reach the log");
     }
 
     [Fact]
