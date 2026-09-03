@@ -3,7 +3,7 @@
     {
       "browser_download_url": "https://github.com/AnthemVH/ServerManager/releases/download/v1.1.0/ServerLauncher.exe",
       "name": "ServerLauncher.exe",
-      "size": 1065782
+      "size": 1065758
     },
     {
       "browser_download_url": "https://github.com/AnthemVH/ServerManager/releases/download/v1.1.0/ServerLauncher.exe.sha256",
@@ -11,7 +11,7 @@
       "size": 64
     }
   ],
-  "body": "**Full Changelog**: https://github.com/AnthemVH/ServerManager/commits/v1.1.0",
+  "body": "**Full Changelog**: https://github.com/AnthemVH/ServerManager/compare/v1.0.0...v1.1.0",
   "draft": false,
   "html_url": "https://github.com/AnthemVH/ServerManager/releases/tag/v1.1.0",
   "prerelease": false,
