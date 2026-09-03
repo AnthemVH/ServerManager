@@ -1,0 +1,151 @@
+<Window x:Class="ServerLauncher.App.Views.ServerEditorWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Server settings"
+        Height="720" Width="620"
+        MinHeight="500" MinWidth="520"
+        Background="{StaticResource Bg.Window}"
+        WindowStartupLocation="CenterOwner"
+        ShowInTaskbar="False">
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <ScrollViewer Grid.Row="0" VerticalScrollBarVisibility="Auto" Padding="20,10,20,10">
+            <StackPanel>
+
+                <TextBlock Text="Server" Style="{StaticResource SectionHeading}" Margin="0,6,0,4" />
+
+                <TextBlock Text="Name" Style="{StaticResource Label}" />
+                <TextBox x:Name="NameBox" />
+
+                <TextBlock Text="Start script" Style="{StaticResource Label}" />
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <TextBox x:Name="ScriptBox" Grid.Column="0" FontFamily="{StaticResource Font.Mono}" FontSize="11.5" />
+                    <Button Grid.Column="1" Content="Browse…" Style="{StaticResource ToolButton}"
+                            Click="OnBrowseScript" Margin="6,0,0,0" Padding="10,4" />
+                </Grid>
+                <TextBlock Style="{StaticResource Hint}"
+                           Text="A .bat, .cmd, .ps1 or .exe. The file is never modified." />
+
+                <TextBlock Text="Working directory" Style="{StaticResource Label}" />
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <TextBox x:Name="WorkingDirBox" Grid.Column="0" FontFamily="{StaticResource Font.Mono}" FontSize="11.5" />
+                    <Button Grid.Column="1" Content="Browse…" Style="{StaticResource ToolButton}"
+                            Click="OnBrowseWorkingDir" Margin="6,0,0,0" Padding="10,4" />
+                </Grid>
+                <TextBlock Style="{StaticResource Hint}"
+                           Text="Leave empty to run from the script's own folder, which is what most server scripts expect." />
+
+                <TextBlock Text="Extra arguments" Style="{StaticResource Label}" />
+                <TextBox x:Name="ArgumentsBox" FontFamily="{StaticResource Font.Mono}" FontSize="11.5" />
+
+                <TextBlock Text="Environment variables" Style="{StaticResource Label}" />
+                <TextBox x:Name="EnvironmentBox"
+                         AcceptsReturn="True"
+                         TextWrapping="NoWrap"
+                         VerticalScrollBarVisibility="Auto"
+                         HorizontalScrollBarVisibility="Auto"
+                         Height="80"
+                         FontFamily="{StaticResource Font.Mono}" FontSize="11.5" />
+                <TextBlock Style="{StaticResource Hint}"
+                           Text="One KEY=VALUE per line, applied on top of the inherited environment — for example JAVA_OPTS=-Xmx4G. Lines starting with # are ignored." />
+
+                <CheckBox x:Name="AutoStartBox" Content="Start this server when the launcher starts" Margin="0,14,0,0" />
+
+                <!-- Shutdown -->
+                <TextBlock Text="Shutdown" Style="{StaticResource SectionHeading}" />
+
+                <TextBlock Text="Stop command" Style="{StaticResource Label}" />
+                <TextBox x:Name="StopCommandBox" FontFamily="{StaticResource Font.Mono}" FontSize="11.5" />
+                <TextBlock Style="{StaticResource Hint}"
+                           Text="Written to the server's console to request a clean shutdown — for example 'stop' for Minecraft or 'quit' for many source engine servers. Leave empty if the server does not read commands; it will be terminated after a short grace period instead." />
+
+                <TextBlock Text="Seconds to wait before force-stopping" Style="{StaticResource Label}" />
+                <TextBox x:Name="GraceBox" Width="90" HorizontalAlignment="Left" />
+
+                <!-- Supervision -->
+                <TextBlock Text="Automatic restarts" Style="{StaticResource SectionHeading}" />
+
+                <TextBlock Text="Restart policy" Style="{StaticResource Label}" />
+                <ComboBox x:Name="RestartPolicyBox" Width="240" HorizontalAlignment="Left" />
+                <TextBlock Style="{StaticResource Hint}"
+                           Text="Never — leave it down. On crash — restart only after a non-zero exit. Always — restart on any exit. Stopping a server yourself never triggers a restart." />
+
+                <TextBlock Text="Give up after this many failures in a row" Style="{StaticResource Label}" />
+                <TextBox x:Name="MaxRestartsBox" Width="90" HorizontalAlignment="Left" />
+
+                <TextBlock Text="Minutes of uptime that count as stable" Style="{StaticResource Label}" />
+                <TextBox x:Name="StableMinutesBox" Width="90" HorizontalAlignment="Left" />
+                <TextBlock Style="{StaticResource Hint}"
+                           Text="Once the server has been up this long, its failure count resets — so a server that crashes once a week never accumulates its way into being given up on." />
+
+                <TextBlock Text="Daily restart time (HH:mm)" Style="{StaticResource Label}" />
+                <TextBox x:Name="ScheduledRestartBox" Width="90" HorizontalAlignment="Left" />
+                <TextBlock Style="{StaticResource Hint}" Text="Leave empty for no scheduled restart." />
+
+                <!-- Backups -->
+                <TextBlock Text="Backups" Style="{StaticResource SectionHeading}" />
+
+                <CheckBox x:Name="BackupEnabledBox" Content="Run scheduled backups for this server" />
+
+                <TextBlock Text="Folder to back up" Style="{StaticResource Label}" />
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <TextBox x:Name="BackupSourceBox" Grid.Column="0" FontFamily="{StaticResource Font.Mono}" FontSize="11.5" />
+                    <Button Grid.Column="1" Content="Browse…" Style="{StaticResource ToolButton}"
+                            Click="OnBrowseBackupSource" Margin="6,0,0,0" Padding="10,4" />
+                </Grid>
+                <TextBlock Style="{StaticResource Hint}" Text="Leave empty to back up the working directory." />
+
+                <TextBlock Text="Where to put the archives" Style="{StaticResource Label}" />
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <TextBox x:Name="BackupDestBox" Grid.Column="0" FontFamily="{StaticResource Font.Mono}" FontSize="11.5" />
+                    <Button Grid.Column="1" Content="Browse…" Style="{StaticResource ToolButton}"
+                            Click="OnBrowseBackupDest" Margin="6,0,0,0" Padding="10,4" />
+                </Grid>
+
+                <TextBlock Text="Backup mode" Style="{StaticResource Label}" />
+                <ComboBox x:Name="BackupModeBox" Width="300" HorizontalAlignment="Left" />
+                <TextBlock Style="{StaticResource Hint}"
+                           Text="Safe stops the server, archives it, then restarts it — always restorable, with a short outage. Live archives while running and skips files the server holds locked, which is faster but may capture a world mid-save." />
+
+                <TextBlock Text="Daily backup time (HH:mm)" Style="{StaticResource Label}" />
+                <TextBox x:Name="BackupTimeBox" Width="90" HorizontalAlignment="Left" />
+
+                <TextBlock Text="Archives to keep" Style="{StaticResource Label}" />
+                <TextBox x:Name="RetentionBox" Width="90" HorizontalAlignment="Left" />
+                <TextBlock Style="{StaticResource Hint}" Text="Older archives are deleted after each successful backup." Margin="0,3,0,10" />
+            </StackPanel>
+        </ScrollViewer>
+
+        <Border Grid.Row="1" Background="{StaticResource Bg.Panel}"
+                BorderBrush="{StaticResource Border.Subtle}" BorderThickness="0,1,0,0"
+                Padding="16,12">
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                <TextBlock x:Name="ValidationText" Foreground="#F48771" VerticalAlignment="Center"
+                           Margin="0,0,14,0" TextWrapping="Wrap" MaxWidth="320" />
+                <Button Content="Cancel" Style="{StaticResource ToolButton}" Click="OnCancel" />
+                <Button Content="Save" Style="{StaticResource PrimaryButton}" Click="OnSave" Margin="0" />
+            </StackPanel>
+        </Border>
+    </Grid>
+</Window>

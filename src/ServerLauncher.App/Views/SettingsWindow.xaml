@@ -1,0 +1,76 @@
+<Window x:Class="ServerLauncher.App.Views.SettingsWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Application settings"
+        Height="540" Width="540"
+        Background="{StaticResource Bg.Window}"
+        WindowStartupLocation="CenterOwner"
+        ResizeMode="CanMinimize"
+        ShowInTaskbar="False">
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <ScrollViewer Grid.Row="0" VerticalScrollBarVisibility="Auto" Padding="20,10,20,10">
+            <StackPanel>
+                <TextBlock Text="Console and logs" Style="{StaticResource SectionHeading}" Margin="0,6,0,4" />
+
+                <TextBlock Text="Console lines kept in memory per server" Style="{StaticResource Label}" />
+                <TextBox x:Name="ConsoleLinesBox" Width="110" HorizontalAlignment="Left" />
+                <TextBlock Style="{StaticResource Hint}"
+                           Text="Older lines scroll out of the console but are still written to the log files." />
+
+                <TextBlock Text="Days of log files to keep" Style="{StaticResource Label}" />
+                <TextBox x:Name="LogRetentionBox" Width="110" HorizontalAlignment="Left" />
+
+                <TextBlock Text="Monitoring" Style="{StaticResource SectionHeading}" />
+
+                <TextBlock Text="Seconds between resource samples" Style="{StaticResource Label}" />
+                <TextBox x:Name="SampleIntervalBox" Width="110" HorizontalAlignment="Left" />
+
+                <TextBlock Text="Window" Style="{StaticResource SectionHeading}" />
+
+                <CheckBox x:Name="MinimiseToTrayBox"
+                          Content="Closing the window hides to the tray and keeps servers running" />
+                <CheckBox x:Name="StartMinimisedBox" Content="Start minimised to the tray" />
+                <CheckBox x:Name="StartWithWindowsBox" Content="Start Server Launcher when I log in" />
+                <TextBlock Style="{StaticResource Hint}"
+                           Text="On a dedicated box, pair this with Windows auto-logon so your servers come back on their own after a reboot. Without it, nothing starts until someone signs in." />
+                <TextBlock Style="{StaticResource Hint}"
+                           Text="Exiting from the tray menu always stops your servers first — the launcher supervises them, so they cannot outlive it." />
+
+                <TextBlock Text="Updates" Style="{StaticResource SectionHeading}" />
+
+                <TextBlock Text="GitHub repository" Style="{StaticResource Label}" />
+                <TextBox x:Name="UpdateRepositoryBox" FontFamily="{StaticResource Font.Mono}" FontSize="11.5" />
+                <TextBlock Style="{StaticResource Hint}"
+                           Text="As owner/name, for example yourname/ServerLauncher. Leave empty to turn update checking off." />
+
+                <CheckBox x:Name="CheckUpdatesBox" Content="Check for updates when the launcher starts" Margin="0,10,0,0" />
+                <TextBlock Style="{StaticResource Hint}"
+                           Text="Checking never installs anything on its own — you are told a version is available and choose when to apply it, because updating restarts your game servers." />
+                <TextBlock Style="{StaticResource Hint}"
+                           Text="Private repositories need a token in the SERVERLAUNCHER_GITHUB_TOKEN environment variable. It is deliberately not stored in settings, so no credential ends up in a plaintext file." />
+
+                <TextBlock Text="PowerShell" Style="{StaticResource SectionHeading}" />
+
+                <TextBlock Text="Executable used to run .ps1 scripts" Style="{StaticResource Label}" />
+                <TextBox x:Name="PowerShellBox" FontFamily="{StaticResource Font.Mono}" FontSize="11.5" />
+                <TextBlock Style="{StaticResource Hint}"
+                           Text="Defaults to powershell.exe (Windows PowerShell), which is always present. Point this at pwsh.exe if you install PowerShell 7." />
+            </StackPanel>
+        </ScrollViewer>
+
+        <Border Grid.Row="1" Background="{StaticResource Bg.Panel}"
+                BorderBrush="{StaticResource Border.Subtle}" BorderThickness="0,1,0,0"
+                Padding="16,12">
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                <Button Content="Cancel" Style="{StaticResource ToolButton}" Click="OnCancel" />
+                <Button Content="Save" Style="{StaticResource PrimaryButton}" Click="OnSave" Margin="0" />
+            </StackPanel>
+        </Border>
+    </Grid>
+</Window>

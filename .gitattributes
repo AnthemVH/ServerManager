@@ -1,0 +1,16 @@
+# Normalise text files in the repository, but keep Windows script line endings.
+* text=auto
+
+# cmd.exe mishandles LF-only batch files — labels and goto break. These must stay CRLF
+# in the working tree on every platform, including CI checkouts.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# Source and project files are fine either way; keep them consistent for diffs.
+*.cs   text
+*.xaml text
+*.csproj text
+*.sln  text eol=crlf
+
+*.ico binary
