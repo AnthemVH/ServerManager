@@ -39,7 +39,7 @@ Schedules keep firing while hidden.
 ## Installing
 
 1. Install the [.NET 8 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/8.0).
-2. Download `ServerLauncher.App.exe` from the
+2. Download `ServerLauncher.exe` from the
    [latest release](https://github.com/AnthemVH/ServerManager/releases/latest).
 3. Put it in a folder you own, such as `C:\ServerManager\`.
 
@@ -126,7 +126,7 @@ no credential is written to a config file.
 
 ### Rolling back
 
-The previous executable is kept beside the new one as `ServerLauncher.App.exe.old` until
+The previous executable is kept beside the new one as `ServerLauncher.exe.old` until
 the update starts successfully. If a build misbehaves, delete the new exe and rename that
 file back.
 
@@ -219,6 +219,6 @@ verified by checking no orphan survives, restart policy and backoff, backups aga
 locked files, update version comparison and the rename-and-rollback swap, theme contrast,
 and WPF data bindings.
 
-> The executable and assemblies are still named `ServerLauncher.*` from the project's
-> original name. Renaming them would change the release asset name and the installed file
-> path, so it has been left alone.
+> The app ships as `ServerLauncher.exe`. The project folders and namespaces keep the
+> `ServerLauncher.App` / `ServerLauncher.Core` names they were created with; only the
+> output binary is renamed.

@@ -15,6 +15,6 @@ public class AssemblyLoadProbe
         var type = typeof(ServerLauncher.App.ViewModels.MainViewModel);
 
         type.Should().NotBeNull();
-        type.Assembly.GetName().Name.Should().Be("ServerLauncher.App");
+        type.Assembly.GetName().Name.Should().Be("ServerLauncher");
     }
 }

@@ -16,10 +16,10 @@ namespace ServerLauncher.Core.Updates;
 public sealed class UpdateService
 {
     /// <summary>Name of the executable asset attached to each release.</summary>
-    public const string AssetName = "ServerLauncher.App.exe";
+    public const string AssetName = "ServerLauncher.exe";
 
     /// <summary>Name of the checksum asset attached alongside it.</summary>
-    public const string ChecksumAssetName = "ServerLauncher.App.exe.sha256";
+    public const string ChecksumAssetName = "ServerLauncher.exe.sha256";
 
     /// <summary>
     /// Optional token for private repositories, read from the environment rather than

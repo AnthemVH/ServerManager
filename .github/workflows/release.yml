@@ -69,8 +69,8 @@ jobs:
         shell: pwsh
         run: |
           # The launcher verifies the download against this before installing it.
-          $hash = (Get-FileHash publish/ServerLauncher.App.exe -Algorithm SHA256).Hash
-          $hash | Out-File -FilePath publish/ServerLauncher.App.exe.sha256 -Encoding ascii -NoNewline
+          $hash = (Get-FileHash publish/ServerLauncher.exe -Algorithm SHA256).Hash
+          $hash | Out-File -FilePath publish/ServerLauncher.exe.sha256 -Encoding ascii -NoNewline
           Write-Host "SHA256: $hash"
 
       - name: Publish release
@@ -80,5 +80,5 @@ jobs:
           name: ${{ steps.version.outputs.tag }}
           generate_release_notes: true
           files: |
-            publish/ServerLauncher.App.exe
-            publish/ServerLauncher.App.exe.sha256
+            publish/ServerLauncher.exe
+            publish/ServerLauncher.exe.sha256

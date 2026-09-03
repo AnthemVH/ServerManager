@@ -67,14 +67,14 @@ public class ReleaseParsingTests
       "prerelease": false,
       "assets": [
         {
-          "name": "ServerLauncher.App.exe",
+          "name": "ServerLauncher.exe",
           "size": 1048576,
-          "browser_download_url": "https://github.com/owner/repo/releases/download/v1.4.0/ServerLauncher.App.exe"
+          "browser_download_url": "https://github.com/owner/repo/releases/download/v1.4.0/ServerLauncher.exe"
         },
         {
-          "name": "ServerLauncher.App.exe.sha256",
+          "name": "ServerLauncher.exe.sha256",
           "size": 64,
-          "browser_download_url": "https://github.com/owner/repo/releases/download/v1.4.0/ServerLauncher.App.exe.sha256"
+          "browser_download_url": "https://github.com/owner/repo/releases/download/v1.4.0/ServerLauncher.exe.sha256"
         }
       ]
     }
@@ -89,7 +89,7 @@ public class ReleaseParsingTests
         release!.Version.Should().Be(new Version(1, 4, 0));
         release.TagName.Should().Be("v1.4.0");
         release.Notes.Should().Contain("console scrollback");
-        release.DownloadUrl.Should().EndWith("ServerLauncher.App.exe");
+        release.DownloadUrl.Should().EndWith("ServerLauncher.exe");
         release.ChecksumUrl.Should().EndWith(".sha256");
         release.SizeBytes.Should().Be(1048576);
         // Formatted for the current locale, so compare the same way rather than
@@ -135,9 +135,9 @@ public class ReleaseParsingTests
           "draft": false,
           "assets": [
             {
-              "name": "ServerLauncher.App.exe",
+              "name": "ServerLauncher.exe",
               "size": 500,
-              "browser_download_url": "https://example.invalid/ServerLauncher.App.exe"
+              "browser_download_url": "https://example.invalid/ServerLauncher.exe"
             }
           ]
         }
@@ -327,7 +327,7 @@ public class RealReleasePayloadTests
         var release = UpdateService.ParseRelease(RealPayload());
 
         release.Should().NotBeNull("the published release must be installable by the app");
-        release!.Version.Should().Be(new Version(1, 0, 0));
+        release!.Version.Should().Be(new Version(1, 1, 0));
         release.DownloadUrl.Should().EndWith(UpdateService.AssetName);
         release.ChecksumUrl.Should().EndWith(UpdateService.ChecksumAssetName,
             "without the checksum the download cannot be verified");
@@ -341,7 +341,7 @@ public class RealReleasePayloadTests
         // offering to reinstall itself in a loop.
         var release = UpdateService.ParseRelease(RealPayload())!;
 
-        UpdateService.IsNewer(release.Version, new Version(1, 0, 0, 0)).Should().BeFalse();
+        UpdateService.IsNewer(release.Version, new Version(1, 1, 0, 0)).Should().BeFalse();
     }
 
     [Fact]
@@ -349,6 +349,6 @@ public class RealReleasePayloadTests
     {
         var release = UpdateService.ParseRelease(RealPayload())!;
 
-        UpdateService.IsNewer(release.Version, new Version(0, 9, 0)).Should().BeTrue();
+        UpdateService.IsNewer(release.Version, new Version(1, 0, 0)).Should().BeTrue();
     }
 }

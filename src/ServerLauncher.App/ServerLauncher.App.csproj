@@ -19,6 +19,8 @@
 
   <PropertyGroup>
     <ApplicationIcon>Assets/app.ico</ApplicationIcon>
+    <!-- Ships as ServerLauncher.exe; the project keeps its own name. -->
+    <AssemblyName>ServerLauncher</AssemblyName>
     <AssemblyTitle>Server Launcher</AssemblyTitle>
     <Product>Server Launcher</Product>
     <Version>1.0.0</Version>
