@@ -24,8 +24,9 @@ namespace ServerLauncher.Core.Remote;
 /// </para>
 /// <para>
 /// The cost is that Microsoft.AspNetCore.App becomes a required framework, so the machine
-/// needs the ASP.NET Core runtime as well as the Desktop one. The updater checks for it
-/// before installing, so an update cannot leave an install unable to start.
+/// needs the ASP.NET Core runtime as well as the Desktop one. Nothing in the app can
+/// guard that: a missing required framework stops the process before any of its code
+/// runs, so it is a release-notes matter.
 /// </para>
 /// <para>
 /// The API can start, stop and inspect servers that already exist. It has no endpoint that

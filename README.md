@@ -59,8 +59,10 @@ and it publishes to the internet only over TLS.
 ## Installing
 
 1. Install the [.NET 8 Desktop Runtime and the ASP.NET Core Runtime](https://dotnet.microsoft.com/download/dotnet/8.0).
-   Both are needed: the window uses one and the remote API uses the other. The app will
-   not start without them, and the updater refuses to install a version that would.
+   Both are needed: the window uses one and the remote API uses the other. **If either is
+   missing the app will not start at all**, and it cannot warn you itself — a missing
+   framework stops the process before any of its code runs. Updating from v1.4.1 or
+   earlier therefore needs the ASP.NET Core Runtime installed first.
 2. Download `ServerLauncher.exe` from the
    [latest release](https://github.com/AnthemVH/ServerManager/releases/latest).
 3. Put it in a folder you own, such as `C:\ServerManager\`.
