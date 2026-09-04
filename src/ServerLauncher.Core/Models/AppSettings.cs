@@ -40,4 +40,9 @@ public sealed class AppSettings
     /// this is what brings servers back after an unattended reboot.
     /// </summary>
     public bool StartWithWindows { get; set; }
+
+    // --- Remote access ---
+
+    /// <summary>Settings for the phone control API. Disabled until switched on.</summary>
+    public Remote.RemoteAccessSettings RemoteAccess { get; set; } = new();
 }

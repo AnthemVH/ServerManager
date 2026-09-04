@@ -38,6 +38,11 @@ public sealed class ServerManager : IDisposable
         _store = store ?? new ConfigurationStore();
         AppPaths.EnsureCreated();
         Settings = _store.LoadSettings();
+
+        // Take a reading immediately so AppHealth reports real memory, thread and handle
+        // counts from the moment the manager exists rather than zeros until the first
+        // timer tick, and so the first timed sample already has a CPU baseline to diff.
+        _appHealth.Sample();
     }
 
     public AppSettings Settings { get; private set; }
