@@ -46,6 +46,13 @@ public sealed class ServerDefinition
 
     public RestartPolicy RestartPolicy { get; set; } = RestartPolicy.OnCrash;
 
+    /// <summary>
+    /// Extra exit codes to treat as a clean shutdown rather than a crash, on top of 0 and
+    /// the standard Windows user-termination codes. Useful for servers that report their
+    /// own code when you close their window.
+    /// </summary>
+    public List<int> CleanExitCodes { get; set; } = new();
+
     /// <summary>Consecutive failed restarts before the server is parked in Failed state.</summary>
     public int MaxConsecutiveRestarts { get; set; } = 5;
 
@@ -100,6 +107,7 @@ public sealed class ServerDefinition
     {
         var copy = (ServerDefinition)MemberwiseClone();
         copy.EnvironmentVariables = new Dictionary<string, string>(EnvironmentVariables);
+        copy.CleanExitCodes = new List<int>(CleanExitCodes);
         return copy;
     }
 

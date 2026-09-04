@@ -18,6 +18,31 @@ public static class RestartPolicyEngine
         TimeSpan.FromSeconds(60)
     };
 
+    /// <summary>
+    /// Exit codes Windows produces when a user ends a process themselves rather than it
+    /// failing: closing the console window, or Ctrl+C / Ctrl+Break. Treating these as
+    /// crashes made a manually closed server restart itself, which is the opposite of
+    /// what closing it meant.
+    /// </summary>
+    public static readonly IReadOnlyList<int> UserTerminationExitCodes = new[]
+    {
+        unchecked((int)0xC000013A), // STATUS_CONTROL_C_EXIT - console closed, or Ctrl+C
+        unchecked((int)0x40010004)  // DBG_CONTROL_BREAK - Ctrl+Break
+    };
+
+    /// <summary>
+    /// Whether an exit code represents a clean stop: success, a user closing the server
+    /// themselves, or a code the server has been configured to report on shutdown.
+    /// </summary>
+    public static bool IsCleanExit(int exitCode, ServerDefinition definition)
+    {
+        ArgumentNullException.ThrowIfNull(definition);
+
+        return exitCode == 0
+               || UserTerminationExitCodes.Contains(exitCode)
+               || definition.CleanExitCodes.Contains(exitCode);
+    }
+
     public static TimeSpan BackoffFor(int consecutiveFailures)
     {
         if (consecutiveFailures <= 0)
@@ -53,16 +78,18 @@ public static class RestartPolicyEngine
         if (definition.RestartPolicy == RestartPolicy.Never)
         {
             return new RestartDecision(false, TimeSpan.Zero, 0,
-                exitCode == 0 ? ServerState.Stopped : ServerState.Crashed,
+                IsCleanExit(exitCode, definition) ? ServerState.Stopped : ServerState.Crashed,
                 $"Exited with code {exitCode}; restart policy is Never.");
         }
 
-        var cleanExit = exitCode == 0;
+        var cleanExit = IsCleanExit(exitCode, definition);
 
         if (definition.RestartPolicy == RestartPolicy.OnCrash && cleanExit)
         {
             return new RestartDecision(false, TimeSpan.Zero, 0, ServerState.Stopped,
-                "Exited cleanly; restart policy is OnCrash.");
+                UserTerminationExitCodes.Contains(exitCode)
+                    ? "Closed by hand rather than crashing, so it will not be restarted."
+                    : "Exited cleanly; restart policy is OnCrash.");
         }
 
         // Staying up for a decent stretch means the previous failures are not part of a

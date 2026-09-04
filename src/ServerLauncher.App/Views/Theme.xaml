@@ -117,7 +117,7 @@
             <Setter.Value>
                 <ControlTemplate TargetType="Thumb">
                     <Border x:Name="Root" Background="{StaticResource Scroll.Thumb}"
-                            CornerRadius="4" Margin="2" />
+                            CornerRadius="5" Margin="3" MinHeight="28" MinWidth="28" />
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsMouseOver" Value="True">
                             <Setter TargetName="Root" Property="Background" Value="{StaticResource Scroll.ThumbHover}" />
@@ -145,13 +145,14 @@
     </Style>
 
     <Style TargetType="ScrollBar">
-        <Setter Property="Background" Value="Transparent" />
-        <Setter Property="Width" Value="12" />
-        <Setter Property="MinWidth" Value="12" />
+        <!-- Wide enough to grab comfortably; 12px was awkward to hit in the console. -->
+        <Setter Property="Background" Value="#1A000000" />
+        <Setter Property="Width" Value="18" />
+        <Setter Property="MinWidth" Value="18" />
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="ScrollBar">
-                    <Grid Background="Transparent">
+                    <Grid Background="{TemplateBinding Background}">
                         <Track x:Name="PART_Track" IsDirectionReversed="True">
                             <Track.DecreaseRepeatButton>
                                 <RepeatButton Command="ScrollBar.PageUpCommand"
@@ -168,8 +169,8 @@
                     </Grid>
                     <ControlTemplate.Triggers>
                         <Trigger Property="Orientation" Value="Horizontal">
-                            <Setter Property="Height" Value="12" />
-                            <Setter Property="MinHeight" Value="12" />
+                            <Setter Property="Height" Value="18" />
+                            <Setter Property="MinHeight" Value="18" />
                             <Setter Property="Width" Value="Auto" />
                             <Setter TargetName="PART_Track" Property="IsDirectionReversed" Value="False" />
                         </Trigger>

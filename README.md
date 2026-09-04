@@ -14,6 +14,10 @@ running in the tray so your servers stay up.
 input box that sends commands straight to the running server. Full history is written to
 daily rolling log files, so nothing is lost when the on-screen buffer scrolls.
 
+**Launcher scripts** — scripts that start the server and then exit, rather than staying
+alive for its lifetime, are supported. ServerManager notices the script left processes
+behind and supervises those instead. Arma 3 server scripts work this way.
+
 **Crash recovery** — restart on crash or on any exit, with exponential backoff
 (5s → 10s → 30s → 60s). The failure counter resets once a server has been up a while, so a
 server that crashes once a week never accumulates its way into being given up on. A hard
@@ -70,6 +74,7 @@ The settings that matter most:
 |---------|--------------|
 | **Stop command** | Written to the server's console for a clean shutdown — `stop` for Minecraft, `quit` for many source engine servers. Leave empty if the server does not read commands; it is terminated after a short grace period instead. |
 | **Restart policy** | *Never*, *On crash* (non-zero exit only), or *Always*. |
+| **Clean exit codes** | Extra exit codes that mean "stopped", not "crashed". Closing a server's own window is already recognised, so doing that never triggers a restart. |
 | **Environment variables** | One `KEY=VALUE` per line, e.g. `JAVA_OPTS=-Xmx4G`. |
 | **Working directory** | Leave empty to run from the script's own folder, which is what most server scripts expect. |
 
@@ -172,6 +177,31 @@ PowerShell host is configurable if you install PowerShell 7 (`pwsh.exe`).
 
 The stop command is written to the server's stdin, the app waits up to the graceful
 timeout, and only then terminates the job.
+
+Closing a server's own window is **not** treated as a crash. Windows ends such a process
+with `STATUS_CONTROL_C_EXIT`, and reading that as a failure meant a server you had just
+closed by hand restarted itself. That code and `DBG_CONTROL_BREAK` now count as a clean
+stop, and any further codes your server reports on shutdown can be added per server.
+
+### Scripts that launch and exit
+
+Some scripts start the real server and return immediately instead of running for its
+lifetime — the Arma 3 server scripts call `$p.Start()` and fall off the end of the file.
+
+Taking the script's exit as the server's exit would dispose the job object, and
+`KILL_ON_JOB_CLOSE` would then kill the server that had just started. So when a script
+exits leaving processes behind, ServerManager keeps the job and supervises those instead.
+The server counts as stopped when the job empties.
+
+The decision waits a couple of seconds first: Windows leaves a console host in the job for
+a moment after any script exits, and treating that straggler as a launched server would
+stop crashes being detected at all.
+
+Two things are unavailable for a server started this way, because the process that owned
+the console is gone: **live console output** and **stop commands**. Stopping still
+terminates everything the script launched. To get console and stdin back, have the script
+wait for the server instead of exiting — in PowerShell, `$p.WaitForExit()` after starting
+it.
 
 ---
 

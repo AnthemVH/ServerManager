@@ -51,6 +51,7 @@ public partial class ServerEditorWindow : Window
         GraceBox.Text = d.GracefulStopTimeoutSeconds.ToString();
 
         RestartPolicyBox.SelectedItem = d.RestartPolicy;
+        CleanExitCodesBox.Text = string.Join(", ", d.CleanExitCodes);
         MaxRestartsBox.Text = d.MaxConsecutiveRestarts.ToString();
         StableMinutesBox.Text = d.StableUptimeMinutes.ToString();
         ScheduledRestartBox.Text = d.ScheduledRestartTime;
@@ -83,6 +84,7 @@ public partial class ServerEditorWindow : Window
         d.GracefulStopTimeoutSeconds = ParseInt(GraceBox.Text, 30, min: 1);
 
         d.RestartPolicy = (RestartPolicy)(RestartPolicyBox.SelectedItem ?? RestartPolicy.OnCrash);
+        d.CleanExitCodes = ParseExitCodes(CleanExitCodesBox.Text);
         d.MaxConsecutiveRestarts = ParseInt(MaxRestartsBox.Text, 5, min: 1);
         d.StableUptimeMinutes = ParseInt(StableMinutesBox.Text, 5, min: 1);
         d.ScheduledRestartTime = ScheduledRestartBox.Text.Trim();
@@ -161,6 +163,18 @@ public partial class ServerEditorWindow : Window
             || TimeOnly.TryParseExact(text, "HH:mm", CultureInfo.InvariantCulture,
                                      DateTimeStyles.None, out _);
     }
+
+    /// <summary>
+    /// Parses a comma or space separated list of exit codes, ignoring anything that is
+    /// not a number rather than rejecting the whole field.
+    /// </summary>
+    private static List<int> ParseExitCodes(string text) =>
+        text.Split(new[] { ',', ' ', ';' }, StringSplitOptions.RemoveEmptyEntries)
+            .Select(part => int.TryParse(part.Trim(), out var code) ? code : (int?)null)
+            .Where(code => code.HasValue)
+            .Select(code => code!.Value)
+            .Distinct()
+            .ToList();
 
     private static int ParseInt(string text, int fallback, int min)
     {

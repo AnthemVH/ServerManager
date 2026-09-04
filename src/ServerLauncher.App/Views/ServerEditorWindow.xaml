@@ -83,6 +83,12 @@
                 <TextBlock Style="{StaticResource Hint}"
                            Text="Never — leave it down. On crash — restart only after a non-zero exit. Always — restart on any exit. Stopping a server yourself never triggers a restart." />
 
+                <TextBlock Text="Exit codes that mean a clean stop" Style="{StaticResource Label}" />
+                <TextBox x:Name="CleanExitCodesBox" Width="240" HorizontalAlignment="Left"
+                         FontFamily="{StaticResource Font.Mono}" FontSize="11.5" />
+                <TextBlock Style="{StaticResource Hint}"
+                           Text="Comma separated. Code 0 and the standard Windows codes for closing a window or pressing Ctrl+C are always treated as a clean stop, so closing a server yourself never triggers a restart. Add codes here if your server reports its own on shutdown." />
+
                 <TextBlock Text="Give up after this many failures in a row" Style="{StaticResource Label}" />
                 <TextBox x:Name="MaxRestartsBox" Width="90" HorizontalAlignment="Left" />
 

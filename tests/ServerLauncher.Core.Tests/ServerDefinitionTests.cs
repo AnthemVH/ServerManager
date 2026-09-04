@@ -22,6 +22,18 @@ public class ServerDefinitionTests
     }
 
     [Fact]
+    public void Clone_DeepCopiesCleanExitCodes()
+    {
+        var original = new ServerDefinition();
+        original.CleanExitCodes.Add(7);
+
+        var copy = original.Clone();
+        copy.CleanExitCodes.Add(9);
+
+        original.CleanExitCodes.Should().ContainSingle().Which.Should().Be(7);
+    }
+
+    [Fact]
     public void Clone_CopiesEveryScalarField()
     {
         var original = new ServerDefinition

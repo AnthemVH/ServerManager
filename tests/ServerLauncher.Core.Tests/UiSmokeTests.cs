@@ -340,7 +340,8 @@ public sealed class UiSmokeTests : IDisposable
                 BackupMode = BackupMode.Live,
                 BackupScheduleTime = "04:15",
                 BackupRetentionCount = 12,
-                EnvironmentVariables = { ["JAVA_OPTS"] = "-Xmx4G", ["WORLD"] = "overworld" }
+                EnvironmentVariables = { ["JAVA_OPTS"] = "-Xmx4G", ["WORLD"] = "overworld" },
+                CleanExitCodes = { 7, 42 }
             };
 
             var window = (ServerEditorWindow)Offscreen(new ServerEditorWindow(original.Clone(), isNew: false));
@@ -369,6 +370,7 @@ public sealed class UiSmokeTests : IDisposable
                 loaded.BackupScheduleTime.Should().Be(original.BackupScheduleTime);
                 loaded.BackupRetentionCount.Should().Be(original.BackupRetentionCount);
                 loaded.EnvironmentVariables.Should().BeEquivalentTo(original.EnvironmentVariables);
+                loaded.CleanExitCodes.Should().BeEquivalentTo(original.CleanExitCodes);
             }
             finally
             {

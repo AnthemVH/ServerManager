@@ -35,6 +35,24 @@ public sealed class ServerProcess : IDisposable
     /// <summary>Completes with the exit code when the process ends.</summary>
     public Task<int> ExitTask => _exitSource.Task;
 
+    /// <summary>
+    /// Process IDs in the job other than the script we launched.
+    /// </summary>
+    /// <remarks>
+    /// The root is excluded deliberately. When its Exited event fires the process is
+    /// often still listed in the job for a moment, so counting it would make every
+    /// ordinary crash look like a launcher that left work behind.
+    /// </remarks>
+    public IReadOnlyList<int> GetSurvivingProcessIds() =>
+        GetTreeProcessIds().Where(pid => pid != ProcessId).ToList();
+
+    /// <summary>
+    /// True when something the script started is still alive, even though the script
+    /// itself has exited. Launcher-style scripts start the real server and then return,
+    /// so the root exiting does not mean the server has stopped.
+    /// </summary>
+    public bool HasLiveProcesses => GetSurvivingProcessIds().Count > 0;
+
     public bool IsRunning
     {
         get
@@ -107,13 +125,27 @@ public sealed class ServerProcess : IDisposable
 
         _process.Exited += (_, _) =>
         {
-            // WaitForExit with no timeout flushes the async output readers, so we do
-            // not lose the last lines a crashing server printed on its way out.
+            // WaitForExit with no timeout flushes the async output readers so the last
+            // lines a crashing server printed are not lost. It is bounded here because a
+            // launcher script's child inherits our stdout pipe and holds it open: an
+            // unbounded wait would then block this handler for as long as that child runs.
             try
             {
-                _process.WaitForExit();
+                var drain = Task.Run(() =>
+                {
+                    try
+                    {
+                        _process.WaitForExit();
+                    }
+                    catch (Exception ex) when (ex is InvalidOperationException or SystemException)
+                    {
+                        // Nothing further to drain.
+                    }
+                });
+
+                drain.Wait(TimeSpan.FromSeconds(3));
             }
-            catch (InvalidOperationException)
+            catch (Exception ex) when (ex is InvalidOperationException or AggregateException)
             {
                 // Process already cleaned up; nothing further to drain.
             }
@@ -168,6 +200,16 @@ public sealed class ServerProcess : IDisposable
     {
         if (!IsRunning)
         {
+            // The script we launched has exited. If it left the real server behind,
+            // stopping still has to take that down rather than quietly succeeding.
+            if (HasLiveProcesses)
+            {
+                LineReceived?.Invoke(LogLine.Launcher(
+                    "Launcher script already exited; terminating the processes it started."));
+                Kill();
+                return false;
+            }
+
             return true;
         }
 

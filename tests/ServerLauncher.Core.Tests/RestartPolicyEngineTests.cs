@@ -83,6 +83,89 @@ public class RestartPolicyEngineTests
         decision.ShouldRestart.Should().BeTrue();
     }
 
+    [Fact]
+    public void ClosingAServersOwnWindow_CountsAsAStopNotACrash()
+    {
+        // Closing a console window makes Windows end the process with STATUS_CONTROL_C_EXIT.
+        // Reading that as a crash restarted a server the user had just closed by hand.
+        const int statusControlCExit = unchecked((int)0xC000013A);
+
+        var decision = RestartPolicyEngine.Evaluate(
+            Definition(RestartPolicy.OnCrash), statusControlCExit, operatorInitiated: false, ShortRun, 0);
+
+        decision.ShouldRestart.Should().BeFalse();
+        decision.ResultingState.Should().Be(ServerState.Stopped);
+        decision.Reason.Should().Contain("Closed by hand");
+    }
+
+    [Fact]
+    public void CtrlBreak_AlsoCountsAsAStop()
+    {
+        const int dbgControlBreak = unchecked((int)0x40010004);
+
+        var decision = RestartPolicyEngine.Evaluate(
+            Definition(RestartPolicy.OnCrash), dbgControlBreak, operatorInitiated: false, ShortRun, 0);
+
+        decision.ShouldRestart.Should().BeFalse();
+        decision.ResultingState.Should().Be(ServerState.Stopped);
+    }
+
+    [Fact]
+    public void UserTerminationUnderNeverPolicy_ShowsStoppedRatherThanCrashed()
+    {
+        const int statusControlCExit = unchecked((int)0xC000013A);
+
+        var decision = RestartPolicyEngine.Evaluate(
+            Definition(RestartPolicy.Never), statusControlCExit, operatorInitiated: false, ShortRun, 0);
+
+        decision.ResultingState.Should().Be(ServerState.Stopped,
+            "the user closed it, so calling it crashed would be wrong");
+    }
+
+    [Fact]
+    public void AGenuineCrashIsStillTreatedAsACrash()
+    {
+        // The point of the change is not to stop restarting real failures.
+        var decision = RestartPolicyEngine.Evaluate(
+            Definition(RestartPolicy.OnCrash), exitCode: 1, operatorInitiated: false, ShortRun, 0);
+
+        decision.ShouldRestart.Should().BeTrue();
+        decision.ResultingState.Should().Be(ServerState.Crashed);
+    }
+
+    [Fact]
+    public void ServerSpecificCleanExitCodesAreHonoured()
+    {
+        var definition = Definition();
+        definition.CleanExitCodes.Add(7);
+
+        var decision = RestartPolicyEngine.Evaluate(definition, 7, operatorInitiated: false, ShortRun, 0);
+
+        decision.ShouldRestart.Should().BeFalse();
+        decision.ResultingState.Should().Be(ServerState.Stopped);
+    }
+
+    [Fact]
+    public void AlwaysPolicy_StillRestartsAfterAManualClose()
+    {
+        // Always means always; someone choosing it wants the server back regardless.
+        const int statusControlCExit = unchecked((int)0xC000013A);
+
+        var decision = RestartPolicyEngine.Evaluate(
+            Definition(RestartPolicy.Always), statusControlCExit, operatorInitiated: false, ShortRun, 0);
+
+        decision.ShouldRestart.Should().BeTrue();
+    }
+
+    [Theory]
+    [InlineData(0, true)]
+    [InlineData(1, false)]
+    [InlineData(-1, false)]
+    public void IsCleanExit_ClassifiesOrdinaryCodes(int exitCode, bool expected)
+    {
+        RestartPolicyEngine.IsCleanExit(exitCode, Definition()).Should().Be(expected);
+    }
+
     [Theory]
     [InlineData(0, 5)]
     [InlineData(1, 5)]

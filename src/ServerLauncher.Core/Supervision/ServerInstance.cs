@@ -15,6 +15,13 @@ public sealed class ServerInstance : IDisposable
 {
     private const int ResourceHistoryLength = 60;
 
+    /// <summary>
+    /// How long to wait before deciding a script that exited was a launcher. Long enough
+    /// for Windows to clear the console host it leaves in the job, short enough that
+    /// crash detection stays prompt.
+    /// </summary>
+    private static readonly TimeSpan LauncherSettleDelay = TimeSpan.FromSeconds(2);
+
     private readonly AppSettings _settings;
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly LogRingBuffer _console;
@@ -22,12 +29,25 @@ public sealed class ServerInstance : IDisposable
     private readonly ResourceSampler _sampler = new();
     private readonly Queue<ResourceSample> _resourceHistory = new();
     private readonly object _historyGate = new();
+    private readonly object _detachGate = new();
 
     private ServerProcess? _process;
     private CancellationTokenSource? _pendingRestart;
     private int _consecutiveFailures;
     private bool _operatorStop;
     private bool _disposed;
+
+    /// <summary>
+    /// Set when the launched script exited but left running processes behind. From then
+    /// on the job object, not the script, tells us whether the server is up.
+    /// </summary>
+    private bool _launcherDetached;
+
+    /// <summary>
+    /// Set once a run has reported its outcome, so a stop racing the launcher settle
+    /// window cannot report it a second time.
+    /// </summary>
+    private int _runCompleted;
 
     /// <param name="definition">The server to supervise.</param>
     /// <param name="settings">Application settings governing buffers and retention.</param>
@@ -66,6 +86,16 @@ public sealed class ServerInstance : IDisposable
 
     public IReadOnlyList<LogLine> ConsoleSnapshot() => _console.Snapshot();
 
+    /// <summary>Live process IDs in this server's tree.</summary>
+    public IReadOnlyList<int> TreeProcessIds() =>
+        _process?.GetTreeProcessIds() ?? Array.Empty<int>();
+
+    /// <summary>
+    /// True when the script that started this server has exited and the server it
+    /// launched is what we are now supervising.
+    /// </summary>
+    public bool IsLauncherDetached => _launcherDetached;
+
     public IReadOnlyList<ResourceSample> ResourceHistory()
     {
         lock (_historyGate)
@@ -88,10 +118,13 @@ public sealed class ServerInstance : IDisposable
         {
             CancelPendingRestart();
 
-            if (_process is not null && _process.IsRunning)
+            if (_process is not null && (_process.IsRunning || _process.HasLiveProcesses))
             {
                 return;
             }
+
+            _launcherDetached = false;
+            Interlocked.Exchange(ref _runCompleted, 0);
 
             SetState(ServerState.Starting);
             Append(LogLine.Launcher($"Starting from {Definition.ScriptPath}"));
@@ -134,7 +167,7 @@ public sealed class ServerInstance : IDisposable
             _consecutiveFailures = 0;
 
             process = _process;
-            if (process is null || !process.IsRunning)
+            if (process is null || (!process.IsRunning && !process.HasLiveProcesses))
             {
                 SetState(ServerState.Stopped);
                 return;
@@ -152,6 +185,12 @@ public sealed class ServerInstance : IDisposable
 
         var timeout = TimeSpan.FromSeconds(Math.Max(1, Definition.GracefulStopTimeoutSeconds));
         await process.StopAsync(Definition.StopCommand, timeout, cancellationToken).ConfigureAwait(false);
+
+        if (_launcherDetached)
+        {
+            // No root process remains to raise Exited, so complete the teardown here.
+            FinishDetachedRun(operatorInitiated: true, process);
+        }
     }
 
     public async Task RestartAsync(CancellationToken cancellationToken = default)
@@ -170,6 +209,13 @@ public sealed class ServerInstance : IDisposable
         var process = _process;
         if (process is null || !process.IsRunning)
         {
+            if (_launcherDetached)
+            {
+                Append(LogLine.Launcher(
+                    "Cannot send commands: this server was started by a launcher script that has "
+                    + "exited, so there is no console to write to."));
+            }
+
             return false;
         }
 
@@ -181,7 +227,22 @@ public sealed class ServerInstance : IDisposable
     public void Poll()
     {
         var process = _process;
-        if (process is null || !process.IsRunning || State != ServerState.Running)
+        if (process is null || State != ServerState.Running)
+        {
+            return;
+        }
+
+        if (_launcherDetached)
+        {
+            // The script is gone, so the job object is the only thing that can tell us
+            // whether the server it started is still alive.
+            if (!process.HasLiveProcesses)
+            {
+                FinishDetachedRun(operatorInitiated: false, process);
+                return;
+            }
+        }
+        else if (!process.IsRunning)
         {
             return;
         }
@@ -205,8 +266,82 @@ public sealed class ServerInstance : IDisposable
 
     private void OnProcessExited(ServerProcess process, int exitCode)
     {
-        var uptime = DateTimeOffset.Now - process.StartedAt;
         var operatorStop = _operatorStop;
+
+        // A launcher script starts the real server and then exits — the Arma 3 scripts
+        // work exactly this way. Treating that exit as the server's exit would dispose the
+        // job object, and KILL_ON_JOB_CLOSE would kill the server that had just started.
+        if (!operatorStop && process.HasLiveProcesses)
+        {
+            // Not decided yet: Windows leaves a console host in the job for a few hundred
+            // milliseconds after an ordinary script exits, and mistaking that straggler
+            // for a launched server would stop crashes ever being detected. Only survivors
+            // that are still there a moment later mean a real launcher.
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await Task.Delay(LauncherSettleDelay).ConfigureAwait(false);
+
+                    if (process.HasLiveProcesses)
+                    {
+                        BeginDetachedSupervision(process, exitCode);
+                    }
+                    else
+                    {
+                        CompleteRun(process, exitCode, operatorStop);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Append(LogLine.Launcher($"Failed to resolve server exit: {ex.Message}"));
+                }
+            });
+
+            return;
+        }
+
+        CompleteRun(process, exitCode, operatorStop);
+    }
+
+    /// <summary>
+    /// Hands supervision over to the job object after a launcher script has exited,
+    /// leaving the server it started running.
+    /// </summary>
+    private void BeginDetachedSupervision(ServerProcess process, int exitCode)
+    {
+        if (Volatile.Read(ref _runCompleted) == 1)
+        {
+            return;
+        }
+
+        lock (_detachGate)
+        {
+            _launcherDetached = true;
+        }
+
+        process.LineReceived -= OnLineReceived;
+
+        var survivors = process.GetSurvivingProcessIds().Count;
+        Append(LogLine.Launcher(
+            $"Launcher script exited with code {exitCode}, leaving {survivors} process(es) "
+            + "running. Supervising those instead."));
+        Append(LogLine.Launcher(
+            "Console output and stop commands are unavailable for a launcher-started server, "
+            + "because the script that owned the console has gone. Stopping still terminates "
+            + "everything it launched."));
+    }
+
+    /// <summary>Finishes a run whose process actually ended, applying the restart policy.</summary>
+    private void CompleteRun(ServerProcess process, int exitCode, bool operatorStop)
+    {
+        // Guarded so a stop racing the settle window cannot report the outcome twice.
+        if (Interlocked.Exchange(ref _runCompleted, 1) == 1)
+        {
+            return;
+        }
+
+        var uptime = DateTimeOffset.Now - process.StartedAt;
 
         process.LineReceived -= OnLineReceived;
         _process = null;
@@ -214,6 +349,57 @@ public sealed class ServerInstance : IDisposable
 
         var decision = RestartPolicyEngine.Evaluate(
             Definition, exitCode, operatorStop, uptime, _consecutiveFailures);
+
+        _consecutiveFailures = decision.ConsecutiveFailures;
+
+        Append(LogLine.Launcher(decision.Reason));
+        SetState(decision.ResultingState);
+
+        process.Dispose();
+
+        if (decision.ShouldRestart)
+        {
+            ScheduleRestart(decision.Delay);
+        }
+    }
+
+    /// <summary>
+    /// Completes a run that outlived its launcher script.
+    /// </summary>
+    /// <remarks>
+    /// There is no exit code to read here — the script reported its own when it finished,
+    /// and it says nothing about the server. A tree that empties without being asked to is
+    /// treated as a crash, which is what it is from the operator's point of view, and is
+    /// what makes the On crash policy work for launcher-started servers.
+    /// </remarks>
+    private void FinishDetachedRun(bool operatorInitiated, ServerProcess process)
+    {
+        lock (_detachGate)
+        {
+            if (!_launcherDetached)
+            {
+                return;
+            }
+
+            _launcherDetached = false;
+        }
+
+        if (Interlocked.Exchange(ref _runCompleted, 1) == 1)
+        {
+            return;
+        }
+
+        var uptime = DateTimeOffset.Now - process.StartedAt;
+
+        _process = null;
+        StartedAt = null;
+
+        var decision = RestartPolicyEngine.Evaluate(
+            Definition,
+            operatorInitiated ? 0 : -1,
+            operatorInitiated,
+            uptime,
+            _consecutiveFailures);
 
         _consecutiveFailures = decision.ConsecutiveFailures;
 
