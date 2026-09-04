@@ -23,6 +23,12 @@ never triggers a restart.
 **Resource monitoring** — CPU, memory, uptime and process count measured across the
 server's whole process tree, with a CPU history graph.
 
+**Self-monitoring** — ServerManager also reports its own CPU, memory, managed heap,
+thread and handle counts. It supervises everything else, so if it falls over the servers
+go with it; a handle or memory count that climbs and never settles is the earliest sign of
+trouble. A compact readout sits in the status bar at all times, with the full breakdown
+under Monitoring.
+
 **Backups** — scheduled or on-demand zip archives with retention. *Safe* mode stops the
 server, archives, and restarts it, which is always restorable at the cost of a short
 outage. *Live* mode archives while running and skips files the server holds locked.
@@ -30,7 +36,8 @@ outage. *Live* mode archives while running and skips files the server holds lock
 **Scheduling** — a daily restart time and a daily backup time per server.
 
 **Tray resident** — closing the window hides to the tray and servers keep running.
-Schedules keep firing while hidden.
+Schedules keep firing while hidden. Launching ServerManager again brings the running
+copy's window back rather than reporting that it is already running.
 
 **Self-updating** — checks GitHub for new releases and installs them on your approval.
 

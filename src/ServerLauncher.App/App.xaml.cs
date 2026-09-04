@@ -1,4 +1,5 @@
 using System.Windows;
+using ServerLauncher.App.TrayIcon;
 using ServerLauncher.App.ViewModels;
 using ServerLauncher.Core.Models;
 using ServerLauncher.Core.Supervision;
@@ -10,10 +11,16 @@ public partial class App : Application
 {
     private const string SingleInstanceMutexName = @"Global\ServerLauncher.SingleInstance";
 
+    /// <summary>Signalled by a second launch to bring the running instance forward.</summary>
+    private const string ShowWindowEventName = @"Global\ServerLauncher.ShowWindow";
+
     private Mutex? _singleInstanceMutex;
+    private EventWaitHandle? _showWindowRequest;
+    private ManualResetEvent? _watcherShutdown;
     private ServerManager? _manager;
     private MainViewModel? _viewModel;
     private MainWindow? _window;
+    private TrayIconController? _tray;
     private bool _exiting;
 
     public new static App Current => (App)Application.Current;
@@ -39,12 +46,9 @@ public partial class App : Application
         _singleInstanceMutex = new Mutex(initiallyOwned: true, SingleInstanceMutexName, out var isFirstInstance);
         if (!isFirstInstance)
         {
-            MessageBox.Show(
-                "Server Launcher is already running. Check the system tray.",
-                "Already running",
-                MessageBoxButton.OK,
-                MessageBoxImage.Information);
-
+            // Asking the running copy to show itself is far more useful than telling the
+            // user it is already running and leaving them with nothing to click.
+            SignalRunningInstance();
             Shutdown();
             return;
         }
@@ -53,7 +57,7 @@ public partial class App : Application
         {
             MessageBox.Show(
                 $"An unexpected error occurred:\n\n{args.Exception.Message}",
-                "Server Launcher",
+                "ServerManager",
                 MessageBoxButton.OK,
                 MessageBoxImage.Error);
 
@@ -63,9 +67,28 @@ public partial class App : Application
         _manager = new ServerManager();
         _viewModel = new MainViewModel(_manager);
         _window = new MainWindow(_viewModel);
+        _window.HiddenToTray += OnWindowHiddenToTray;
+
+        // Created before any decision about showing the window: the tray icon is the only
+        // way back to a launcher that starts minimised, so it must never depend on a
+        // window having been shown.
+        _tray = new TrayIconController(
+            _viewModel,
+            onOpen: ShowMainWindow,
+            onExit: RequestExit,
+            onToggle: ToggleMainWindow);
+
+        StartShowWindowWatcher();
 
         var startHidden = _manager.Settings.StartMinimised
                           || e.Args.Any(a => a.Equals("--minimised", StringComparison.OrdinalIgnoreCase));
+
+        if (startHidden && !_tray.IsCreated)
+        {
+            // Refusing to hide with no way back is better than becoming an invisible
+            // process the user can only find in Task Manager.
+            startHidden = false;
+        }
 
         if (!startHidden)
         {
@@ -81,6 +104,83 @@ public partial class App : Application
             // never delay the servers coming up.
             _ = _viewModel.CheckForUpdatesAsync(announceResult: false);
         }
+    }
+
+    private void OnWindowHiddenToTray() =>
+        _tray?.ShowMessage("Still running", "ServerManager is in the tray and your servers keep running.");
+
+    private void ShowMainWindow() => _window?.RestoreFromTray();
+
+    private void ToggleMainWindow()
+    {
+        if (_window is null)
+        {
+            return;
+        }
+
+        if (_window.IsVisible)
+        {
+            _window.HideToTray();
+        }
+        else
+        {
+            _window.RestoreFromTray();
+        }
+    }
+
+    private void SignalRunningInstance()
+    {
+        try
+        {
+            using var handle = EventWaitHandle.OpenExisting(ShowWindowEventName);
+            handle.Set();
+        }
+        catch (WaitHandleCannotBeOpenedException)
+        {
+            // The other instance is older than this feature, or is shutting down.
+            MessageBox.Show(
+                "ServerManager is already running. Check the system tray.",
+                "Already running",
+                MessageBoxButton.OK,
+                MessageBoxImage.Information);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            MessageBox.Show(
+                "ServerManager is already running, possibly for another user.",
+                "Already running",
+                MessageBoxButton.OK,
+                MessageBoxImage.Information);
+        }
+    }
+
+    /// <summary>Watches for a second launch asking this instance to show its window.</summary>
+    private void StartShowWindowWatcher()
+    {
+        _showWindowRequest = new EventWaitHandle(false, EventResetMode.AutoReset, ShowWindowEventName);
+        _watcherShutdown = new ManualResetEvent(false);
+
+        var handles = new WaitHandle[] { _showWindowRequest, _watcherShutdown };
+
+        var thread = new Thread(() =>
+        {
+            while (true)
+            {
+                var signalled = WaitHandle.WaitAny(handles);
+                if (signalled != 0)
+                {
+                    return;
+                }
+
+                Dispatcher.BeginInvoke(ShowMainWindow);
+            }
+        })
+        {
+            IsBackground = true,
+            Name = "ShowWindowWatcher"
+        };
+
+        thread.Start();
     }
 
     /// <summary>
@@ -141,9 +241,9 @@ public partial class App : Application
                 "Exiting will shut down these running servers:\n\n" +
                 string.Join("\n", running) +
                 "\n\nThey will be stopped cleanly using each server's stop command.\n" +
-                "To keep them running, close the window instead — the launcher stays in the tray.\n\n" +
+                "To keep them running, close the window instead — ServerManager stays in the tray.\n\n" +
                 "Exit and stop all servers?",
-                "Exit Server Launcher",
+                "Exit ServerManager",
                 MessageBoxButton.OKCancel,
                 MessageBoxImage.Warning);
 
@@ -174,8 +274,14 @@ public partial class App : Application
 
     protected override void OnExit(ExitEventArgs e)
     {
+        _watcherShutdown?.Set();
+
+        _tray?.Dispose();
         _viewModel?.Dispose();
         _manager?.Dispose();
+
+        _showWindowRequest?.Dispose();
+        _watcherShutdown?.Dispose();
         _singleInstanceMutex?.Dispose();
 
         base.OnExit(e);

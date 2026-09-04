@@ -47,12 +47,33 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     [ObservableProperty]
     private string _updateProgressText = string.Empty;
 
+    // --- ServerManager's own resource use ---
+
+    [ObservableProperty]
+    private double _appCpuPercent;
+
+    [ObservableProperty]
+    private double _appMemoryMegabytes;
+
+    [ObservableProperty]
+    private double _appManagedMemoryMegabytes;
+
+    [ObservableProperty]
+    private int _appThreadCount;
+
+    [ObservableProperty]
+    private int _appHandleCount;
+
+    [ObservableProperty]
+    private string _appUptimeText = "—";
+
     public MainViewModel(ServerManager manager)
     {
         _manager = manager;
 
         _manager.ServersChanged += OnServersChanged;
         _manager.BackupCompleted += OnBackupCompleted;
+        _manager.AppHealthSampled += OnAppHealthSampled;
 
         // One shared timer drains console output for the selected server. Appending
         // per line straight from the capture thread would stall the UI on a chatty server.
@@ -73,6 +94,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             {
                 server.RefreshUptime();
             }
+
+            RefreshAppUptime();
         };
         _uptimeTimer.Start();
     }
@@ -141,6 +164,44 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
     private void OnBackupCompleted(ServerInstance instance, Core.Backup.BackupResult result) =>
         OnUiThread(() => StatusMessage = $"{instance.Definition.Name}: {result.Message}");
+
+    // --- ServerManager's own resource use ---
+
+    /// <summary>
+    /// Compact readout for the status bar. The launcher supervises everything else, so a
+    /// slow leak here eventually takes every server down with it.
+    /// </summary>
+    public string AppHealthSummary =>
+        $"ServerManager: {AppCpuPercent:0.0}% CPU · {AppMemoryMegabytes:0} MB · up {AppUptimeText}";
+
+    /// <summary>Recent launcher CPU samples, oldest first, for the sparkline.</summary>
+    public IReadOnlyList<double> AppCpuHistory =>
+        _manager.AppHealthHistory().Select(s => s.CpuPercent).ToList();
+
+    private void OnAppHealthSampled(AppHealthSample sample) =>
+        OnUiThread(() =>
+        {
+            AppCpuPercent = sample.CpuPercent;
+            AppMemoryMegabytes = sample.WorkingSetMegabytes;
+            AppManagedMemoryMegabytes = sample.ManagedMemoryMegabytes;
+            AppThreadCount = sample.ThreadCount;
+            AppHandleCount = sample.HandleCount;
+            RefreshAppUptime();
+
+            OnPropertyChanged(nameof(AppHealthSummary));
+            OnPropertyChanged(nameof(AppCpuHistory));
+        });
+
+    private void RefreshAppUptime()
+    {
+        var uptime = DateTimeOffset.Now - _manager.AppStartedAt;
+
+        AppUptimeText = uptime.TotalDays >= 1
+            ? $"{(int)uptime.TotalDays}d {uptime.Hours}h {uptime.Minutes}m"
+            : $"{uptime.Hours:00}:{uptime.Minutes:00}:{uptime.Seconds:00}";
+
+        OnPropertyChanged(nameof(AppHealthSummary));
+    }
 
     // --- Commands ---
 
@@ -532,6 +593,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         _uptimeTimer.Stop();
         _manager.ServersChanged -= OnServersChanged;
         _manager.BackupCompleted -= OnBackupCompleted;
+        _manager.AppHealthSampled -= OnAppHealthSampled;
 
         foreach (var server in Servers)
         {

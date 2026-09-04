@@ -4,6 +4,7 @@ using System.Windows;
 using FluentAssertions;
 using ServerLauncher.App;
 using ServerLauncher.App.ViewModels;
+using ServerLauncher.App.TrayIcon;
 using ServerLauncher.App.Views;
 using ServerLauncher.Core.Models;
 using ServerLauncher.Core.Storage;
@@ -196,6 +197,66 @@ public sealed class UiSmokeTests : IDisposable
                     window.Close();
                 }
 
+                viewModel.Dispose();
+                manager.Dispose();
+            }
+        });
+    }
+
+    [WpfFact]
+    public void TrayIcon_IsCreatedWithoutAnyWindowBeingShown()
+    {
+        // The bug this guards: the tray icon used to live inside MainWindow's XAML, so it
+        // was only created once that window loaded. Starting minimised therefore produced
+        // a running process with no window and no tray icon — invisible, but still holding
+        // the single-instance mutex, so it could not be relaunched either.
+        WpfHarness.RunOnUi(() =>
+        {
+            var manager = CreateIsolatedManager();
+            var viewModel = new MainViewModel(manager);
+            TrayIconController? tray = null;
+
+            try
+            {
+                tray = new TrayIconController(viewModel, () => { }, () => { }, () => { });
+
+                tray.IsCreated.Should().BeTrue(
+                    "the tray icon must exist even when no window has ever been shown");
+            }
+            finally
+            {
+                tray?.Dispose();
+                viewModel.Dispose();
+                manager.Dispose();
+            }
+        });
+    }
+
+    [WpfFact]
+    public void TrayIcon_ListsConfiguredServers()
+    {
+        WpfHarness.RunOnUi(() =>
+        {
+            var manager = CreateIsolatedManager();
+            var viewModel = new MainViewModel(manager);
+
+            manager.Add(new ServerDefinition
+            {
+                Name = "Tray Listed Server",
+                ScriptPath = Path.Combine(AppContext.BaseDirectory, "fixtures", "interactive.bat")
+            });
+
+            viewModel.SyncServers();
+
+            TrayIconController? tray = null;
+            try
+            {
+                tray = new TrayIconController(viewModel, () => { }, () => { }, () => { });
+                tray.IsCreated.Should().BeTrue();
+            }
+            finally
+            {
+                tray?.Dispose();
                 viewModel.Dispose();
                 manager.Dispose();
             }

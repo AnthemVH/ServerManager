@@ -17,12 +17,17 @@ public sealed class ServerManager : IDisposable
 {
     private readonly ConfigurationStore _store;
     private readonly BackupService _backupService = new();
+    private readonly AppHealthMonitor _appHealth = new();
+    private readonly Queue<AppHealthSample> _appHealthHistory = new();
+    private readonly object _appHealthGate = new();
     private readonly List<ServerInstance> _instances = new();
     private readonly object _instancesGate = new();
 
     // Tracks the last date each scheduled action fired, so a schedule runs once a day
     // even though the timer ticks many times within the matching minute.
     private readonly ConcurrentDictionary<(Guid Id, string Kind), DateOnly> _lastFired = new();
+
+    private const int AppHealthHistoryLength = 60;
 
     private Timer? _sampleTimer;
     private Timer? _scheduleTimer;
@@ -51,6 +56,24 @@ public sealed class ServerManager : IDisposable
 
     /// <summary>Raised when a scheduled or manual backup completes.</summary>
     public event Action<ServerInstance, BackupResult>? BackupCompleted;
+
+    /// <summary>Raised after each reading of the launcher's own resource use.</summary>
+    public event Action<AppHealthSample>? AppHealthSampled;
+
+    /// <summary>Most recent reading of the launcher's own resource use.</summary>
+    public AppHealthSample AppHealth => _appHealth.Last;
+
+    /// <summary>When the launcher process started.</summary>
+    public DateTimeOffset AppStartedAt => _appHealth.StartedAt;
+
+    /// <summary>Recent launcher samples, oldest first, for the history graph.</summary>
+    public IReadOnlyList<AppHealthSample> AppHealthHistory()
+    {
+        lock (_appHealthGate)
+        {
+            return _appHealthHistory.ToArray();
+        }
+    }
 
     public IReadOnlyList<ServerInstance> Instances
     {
@@ -218,6 +241,35 @@ public sealed class ServerManager : IDisposable
             {
                 // Sampling is diagnostic; never let it disturb a running server.
             }
+        }
+
+        PollAppHealth();
+    }
+
+    /// <summary>
+    /// Samples the launcher itself on the same cadence as the servers, so one timer
+    /// drives everything rather than a second one ticking alongside it.
+    /// </summary>
+    private void PollAppHealth()
+    {
+        try
+        {
+            var sample = _appHealth.Sample();
+
+            lock (_appHealthGate)
+            {
+                _appHealthHistory.Enqueue(sample);
+                while (_appHealthHistory.Count > AppHealthHistoryLength)
+                {
+                    _appHealthHistory.Dequeue();
+                }
+            }
+
+            AppHealthSampled?.Invoke(sample);
+        }
+        catch (Exception)
+        {
+            // Diagnostics must never destabilise supervision.
         }
     }
 
