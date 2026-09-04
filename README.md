@@ -12,8 +12,9 @@ running in the tray so your servers stay up.
 
 **Dashboard** — every server on one screen, each with its status, CPU, memory, uptime,
 process count and CPU graph, plus start/stop/restart on each card. A summary strip totals
-CPU, memory and processes across all of them and shows how many are running. This is the
-landing view; **Servers** switches to the per-server console and settings.
+CPU, memory and processes across all of them and shows how many are running. **Servers**
+is the view the app opens on, with the per-server console and settings; **Dashboard**
+switches to the overview.
 
 **Console and logs** — live stdout and stderr per server, colour-coded by stream, with an
 input box that sends commands straight to the running server. Full history is written to
@@ -58,21 +59,46 @@ and it publishes to the internet only over TLS.
 
 ## Installing
 
-1. Install the [.NET 8 Desktop Runtime and the ASP.NET Core Runtime](https://dotnet.microsoft.com/download/dotnet/8.0).
-   Both are needed: the window uses one and the remote API uses the other. **If either is
-   missing the app will not start at all**, and it cannot warn you itself — a missing
-   framework stops the process before any of its code runs. Updating from v1.4.1 or
-   earlier therefore needs the ASP.NET Core Runtime installed first.
-2. Download `ServerLauncher.exe` from the
+Every release carries two builds of the same app. Pick one and stay on it — each updates
+itself with its own kind, and never swaps you to the other.
+
+| | `ServerLauncher-standalone.exe` | `ServerLauncher.exe` |
+|---|---|---|
+| Size | ~80 MB | ~1.4 MB |
+| Prerequisites | **none** | .NET 8 Desktop Runtime *and* ASP.NET Core Runtime |
+| Update download | ~80 MB | ~1.4 MB |
+
+**Take the standalone build unless you have a reason not to.** It carries its own .NET
+runtimes, so there is nothing to install first and nothing that can go missing later.
+
+1. Download `ServerLauncher-standalone.exe` from the
    [latest release](https://github.com/AnthemVH/ServerManager/releases/latest).
-3. Put it in a folder you own, such as `C:\ServerManager\`.
+2. Put it in a folder you own, such as `C:\ServerManager\`.
+3. Run it.
 
 **Not `Program Files`.** The app replaces its own executable when updating, and that
 folder is not writable without elevation.
 
-A self-contained build needing no .NET runtime can be produced with the packaging command
-below, but it is ~155 MB and makes every update that size. The framework-dependent build
-published with each release is ~1 MB.
+### If you want the small build instead
+
+Install the [.NET 8 Desktop Runtime and the ASP.NET Core Runtime](https://dotnet.microsoft.com/download/dotnet/8.0)
+first, then download `ServerLauncher.exe`. Both runtimes are needed: the window uses one
+and the remote API uses the other.
+
+**If either is missing the app will not start at all**, and it cannot warn you itself — a
+missing framework stops the process before any of its code runs, so there is no point at
+which the app could check for one and offer to fetch it. That is the whole reason the
+standalone build exists.
+
+### Already running v1.4.1 or earlier
+
+Those builds predate the remote API and do not need the ASP.NET Core Runtime, so updating
+to v1.5.0 or later would leave an app that cannot start. Either install the ASP.NET Core
+Runtime before updating, or download `ServerLauncher-standalone.exe` over the top of your
+existing `ServerLauncher.exe` and forget about runtimes entirely.
+
+Settings, servers and logs live in `%APPDATA%` and `%LOCALAPPDATA%`, so switching builds
+keeps everything you have configured.
 
 ---
 
@@ -320,11 +346,23 @@ dotnet build
 dotnet test
 ```
 
-Package a release build:
+Package the build that needs the runtimes installed:
 
 ```bash
 dotnet publish src/ServerLauncher.App -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true -p:Version=1.0.0 -o dist
 ```
+
+Package the standalone build. `IncludeNativeLibrariesForSelfExtract` is not optional: WPF
+ships native DLLs that otherwise sit next to the executable, and the updater replaces a
+single file:
+
+```bash
+dotnet publish src/ServerLauncher.App -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:EnableCompressionInSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:IncludeAllContentForSelfExtract=true -p:Version=1.0.0 -o dist-standalone
+```
+
+The `--self-contained` flag is stamped into the assembly, and the running build reads it
+back to decide which release asset to update itself with. Publishing without it produces a
+build that will try to install `ServerLauncher.exe`.
 
 ### Layout
 

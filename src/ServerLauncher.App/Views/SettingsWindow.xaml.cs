@@ -53,6 +53,11 @@ public partial class SettingsWindow : Window
         UpdateRepositoryBox.Text = Settings.UpdateRepository;
         CheckUpdatesBox.IsChecked = Settings.CheckForUpdatesOnStartup;
 
+        // Which build this is decides which release asset an update installs, so it is
+        // worth being able to see it without inspecting the file on disk.
+        BuildKindText.Text = "This install: " + BuildInfo.Describe()
+            + $" Updates install '{UpdateService.AssetName}' from each release.";
+
         // Read the real registry state rather than trusting the saved flag, which can
         // drift if the entry was removed outside the app.
         StartWithWindowsBox.IsChecked = StartupRegistration.IsEnabled();

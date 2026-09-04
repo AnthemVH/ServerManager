@@ -33,9 +33,13 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     [ObservableProperty]
     private bool _autoScroll = true;
 
-    /// <summary>Dashboard replaces the list/detail split so every server is visible at once.</summary>
+    /// <summary>
+    /// Dashboard replaces the list/detail split so every server is visible at once.
+    /// Off at startup: the servers view is where anything is actually done, and opening
+    /// on a summary meant an extra click before every task.
+    /// </summary>
     [ObservableProperty]
-    private bool _isDashboardVisible = true;
+    private bool _isDashboardVisible;
 
     // --- Updates ---
 

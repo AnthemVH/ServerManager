@@ -67,7 +67,11 @@ jobs:
         # anything fails.
         run: dotnet test --configuration Release --no-restore --verbosity quiet
 
-      - name: Publish
+      # Two builds, because the small one needs the .NET Desktop and ASP.NET Core
+      # runtimes installed and the standalone one carries them. Each build only ever
+      # updates itself with its own kind, so both must be on every release or a
+      # standalone install would find nothing to update to.
+      - name: Publish (needs runtimes installed)
         shell: pwsh
         run: |
           dotnet publish src/ServerLauncher.App/ServerLauncher.App.csproj `
@@ -78,13 +82,33 @@ jobs:
             -p:Version=${{ needs.version.outputs.version }} `
             --output publish
 
-      - name: Compute checksum
+      - name: Publish (standalone)
         shell: pwsh
         run: |
-          # The launcher verifies the download against this before installing it.
-          $hash = (Get-FileHash publish/ServerLauncher.exe -Algorithm SHA256).Hash
-          $hash | Out-File -FilePath publish/ServerLauncher.exe.sha256 -Encoding ascii -NoNewline
-          Write-Host "SHA256: $hash"
+          dotnet publish src/ServerLauncher.App/ServerLauncher.App.csproj `
+            --configuration Release `
+            --runtime win-x64 `
+            --self-contained true `
+            -p:PublishSingleFile=true `
+            -p:EnableCompressionInSingleFile=true `
+            -p:Version=${{ needs.version.outputs.version }} `
+            --output publish-standalone
+
+          # Renamed so both can sit on the same release, and so the running build can ask
+          # for the asset matching its own kind by name.
+          Move-Item publish-standalone/ServerLauncher.exe publish/ServerLauncher-standalone.exe
+
+      - name: Compute checksums
+        shell: pwsh
+        run: |
+          # The launcher verifies each download against these before installing it.
+          foreach ($name in 'ServerLauncher.exe', 'ServerLauncher-standalone.exe') {
+            $path = "publish/$name"
+            $hash = (Get-FileHash $path -Algorithm SHA256).Hash
+            $hash | Out-File -FilePath "$path.sha256" -Encoding ascii -NoNewline
+            $mb = [math]::Round((Get-Item $path).Length / 1MB, 1)
+            Write-Host "$name  ${mb} MB  SHA256: $hash"
+          }
 
       - name: Publish release
         uses: softprops/action-gh-release@v3
@@ -95,3 +119,5 @@ jobs:
           files: |
             publish/ServerLauncher.exe
             publish/ServerLauncher.exe.sha256
+            publish/ServerLauncher-standalone.exe
+            publish/ServerLauncher-standalone.exe.sha256

@@ -207,8 +207,8 @@ public sealed class UiSmokeTests : IDisposable
     [WpfFact]
     public void Dashboard_BindsCleanlyWithServersPresent()
     {
-        // The dashboard is the default view, so a broken binding here is the first thing
-        // anyone would see on opening the app.
+        // The dashboard is one click from the opening view, so a broken binding here is
+        // among the first things anyone would see.
         WpfHarness.RunOnUi(() =>
         {
             var manager = CreateIsolatedManager();
@@ -224,7 +224,9 @@ public sealed class UiSmokeTests : IDisposable
             }
 
             viewModel.SyncServers();
-            viewModel.IsDashboardVisible.Should().BeTrue("the dashboard is the default view");
+
+            viewModel.IsDashboardVisible.Should().BeFalse("the servers view is what opens");
+            viewModel.ShowDashboardCommand.Execute(null);
 
             using var collector = new BindingErrorCollector();
 
@@ -259,6 +261,7 @@ public sealed class UiSmokeTests : IDisposable
             var manager = CreateIsolatedManager();
             var viewModel = new MainViewModel(manager);
             viewModel.SyncServers();
+            viewModel.ShowDashboardCommand.Execute(null);
 
             using var collector = new BindingErrorCollector();
 
@@ -303,6 +306,10 @@ public sealed class UiSmokeTests : IDisposable
 
             try
             {
+                // The app opens on the servers view: it is where servers are started,
+                // stopped and configured, and the dashboard is a summary of that.
+                viewModel.IsDashboardVisible.Should().BeFalse("the servers view is the opening view");
+
                 var target = viewModel.Servers.Single();
                 viewModel.OpenServerCommand.Execute(target);
 

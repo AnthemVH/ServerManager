@@ -15,11 +15,17 @@ namespace ServerLauncher.Core.Updates;
 /// </summary>
 public sealed class UpdateService
 {
-    /// <summary>Name of the executable asset attached to each release.</summary>
-    public const string AssetName = "ServerLauncher.exe";
+    /// <summary>
+    /// Release asset this build updates itself with. Releases carry both kinds of build,
+    /// and each one must stay on its own kind — see <see cref="BuildInfo"/>.
+    /// </summary>
+    public static string AssetName => BuildInfo.UpdateAssetName;
 
     /// <summary>Name of the checksum asset attached alongside it.</summary>
-    public const string ChecksumAssetName = "ServerLauncher.exe.sha256";
+    public static string ChecksumAssetName => ChecksumNameFor(AssetName);
+
+    /// <summary>The checksum asset published next to a given executable asset.</summary>
+    public static string ChecksumNameFor(string assetName) => assetName + ".sha256";
 
     /// <summary>
     /// Optional token for private repositories, read from the environment rather than
@@ -32,7 +38,9 @@ public sealed class UpdateService
 
     private static HttpClient CreateClient()
     {
-        var client = new HttpClient { Timeout = TimeSpan.FromMinutes(5) };
+        // Generous, because a standalone build is a ~160 MB download and the timeout
+        // covers reading the whole response body, not just the headers.
+        var client = new HttpClient { Timeout = TimeSpan.FromMinutes(30) };
         client.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("ServerLauncher", "1.0"));
         client.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.github+json"));
         return client;
@@ -113,7 +121,9 @@ public sealed class UpdateService
             if (release is null)
             {
                 return new UpdateCheckResult(UpdateCheckStatus.Failed, null,
-                    $"The latest release has no '{AssetName}' attached.");
+                    $"The latest release has no '{AssetName}' attached. This is a "
+                    + $"{(BuildInfo.IsStandalone ? "standalone" : "runtime-dependent")} build, "
+                    + "and it will only install that build of a release.");
             }
 
             return IsNewer(release.Version, currentVersion)
@@ -134,8 +144,16 @@ public sealed class UpdateService
     }
 
     /// <summary>Parses the release JSON. Public so the shape can be unit tested offline.</summary>
-    public static ReleaseInfo? ParseRelease(JsonElement root)
+    /// <param name="root">The release object returned by the GitHub API.</param>
+    /// <param name="assetName">
+    /// Which executable asset to look for. Defaults to the one matching this build, and is
+    /// passed explicitly by tests so both kinds can be exercised from one test run.
+    /// </param>
+    public static ReleaseInfo? ParseRelease(JsonElement root, string? assetName = null)
     {
+        var wanted = string.IsNullOrWhiteSpace(assetName) ? AssetName : assetName;
+        var wantedChecksum = ChecksumNameFor(wanted);
+
         if (!root.TryGetProperty("tag_name", out var tagElement)
             || !TryParseTag(tagElement.GetString(), out var version))
         {
@@ -168,12 +186,12 @@ public sealed class UpdateService
                 continue;
             }
 
-            if (name.Equals(AssetName, StringComparison.OrdinalIgnoreCase))
+            if (name.Equals(wanted, StringComparison.OrdinalIgnoreCase))
             {
                 downloadUrl = url;
                 size = asset.TryGetProperty("size", out var s) && s.TryGetInt64(out var parsed) ? parsed : 0;
             }
-            else if (name.Equals(ChecksumAssetName, StringComparison.OrdinalIgnoreCase))
+            else if (name.Equals(wantedChecksum, StringComparison.OrdinalIgnoreCase))
             {
                 checksumUrl = url;
             }

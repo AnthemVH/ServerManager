@@ -31,4 +31,11 @@
     <Resource Include="Assets/app.ico" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Stamped so the running build knows which release asset it should update itself
+         with. A standalone build must not replace itself with one that needs runtimes
+         installed, and vice versa. -->
+    <AssemblyMetadata Include="SelfContained" Value="$(SelfContained)" />
+  </ItemGroup>
+
 </Project>

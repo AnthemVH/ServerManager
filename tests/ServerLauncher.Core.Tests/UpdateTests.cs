@@ -352,3 +352,102 @@ public class RealReleasePayloadTests
         UpdateService.IsNewer(release.Version, new Version(1, 0, 0)).Should().BeTrue();
     }
 }
+
+/// <summary>
+/// Releases carry two builds: a small one that needs the .NET runtimes installed and a
+/// standalone one that carries them. Getting this selection wrong is not a cosmetic bug —
+/// replacing a standalone install with the small build on a machine without the runtimes
+/// produces an app that cannot start and cannot say why, because a missing framework
+/// stops the process before its code runs.
+/// </summary>
+public class BuildVariantTests
+{
+    private const string ReleaseWithBothBuilds = """
+    {
+      "tag_name": "v1.6.0",
+      "html_url": "https://github.com/AnthemVH/ServerManager/releases/tag/v1.6.0",
+      "body": "notes",
+      "assets": [
+        { "name": "ServerLauncher.exe", "size": 1400000,
+          "browser_download_url": "https://example.invalid/ServerLauncher.exe" },
+        { "name": "ServerLauncher.exe.sha256", "size": 64,
+          "browser_download_url": "https://example.invalid/ServerLauncher.exe.sha256" },
+        { "name": "ServerLauncher-standalone.exe", "size": 83518606,
+          "browser_download_url": "https://example.invalid/ServerLauncher-standalone.exe" },
+        { "name": "ServerLauncher-standalone.exe.sha256", "size": 64,
+          "browser_download_url": "https://example.invalid/ServerLauncher-standalone.exe.sha256" }
+      ]
+    }
+    """;
+
+    private static JsonElement Parse(string json) => JsonDocument.Parse(json).RootElement;
+
+    [Fact]
+    public void TheTwoBuildsAreDistinctAssets()
+    {
+        BuildInfo.StandaloneAsset.Should().NotBe(BuildInfo.FrameworkDependentAsset);
+    }
+
+    [Fact]
+    public void EachBuildAsksForItsOwnKind()
+    {
+        var standalone = UpdateService.ParseRelease(Parse(ReleaseWithBothBuilds), BuildInfo.StandaloneAsset)!;
+        var small = UpdateService.ParseRelease(Parse(ReleaseWithBothBuilds), BuildInfo.FrameworkDependentAsset)!;
+
+        standalone.DownloadUrl.Should().EndWith("/ServerLauncher-standalone.exe");
+        small.DownloadUrl.Should().EndWith("/ServerLauncher.exe");
+    }
+
+    [Fact]
+    public void ChecksumsAreMatchedToTheirOwnAsset()
+    {
+        // The obvious way to get this wrong is to verify the 80 MB standalone download
+        // against the 1.4 MB build's hash, which would reject every update.
+        var standalone = UpdateService.ParseRelease(Parse(ReleaseWithBothBuilds), BuildInfo.StandaloneAsset)!;
+
+        standalone.ChecksumUrl.Should().EndWith("/ServerLauncher-standalone.exe.sha256");
+    }
+
+    [Fact]
+    public void TheSmallBuildsNameIsNotAPrefixMatchForTheStandaloneOne()
+    {
+        // "ServerLauncher.exe" must not be satisfied by "ServerLauncher-standalone.exe"
+        // or vice versa; the lookup is an exact name match, and this pins that.
+        var small = UpdateService.ParseRelease(Parse(ReleaseWithBothBuilds), BuildInfo.FrameworkDependentAsset)!;
+
+        small.SizeBytes.Should().Be(1400000, "the small build's own size, not the standalone one's");
+    }
+
+    [Fact]
+    public void AReleaseMissingThisBuildsKindOffersNothing()
+    {
+        // Releases before v1.6.0 have no standalone asset. Offering the wrong build would
+        // be far worse than reporting there is nothing to install.
+        const string oldRelease = """
+        {
+          "tag_name": "v1.5.1",
+          "assets": [
+            { "name": "ServerLauncher.exe",
+              "browser_download_url": "https://example.invalid/ServerLauncher.exe" }
+          ]
+        }
+        """;
+
+        UpdateService.ParseRelease(Parse(oldRelease), BuildInfo.StandaloneAsset).Should().BeNull();
+    }
+
+    [Fact]
+    public void ABuildThatWasNotPublishedStandaloneSaysSo()
+    {
+        // The test host is built without SelfContained, so this also proves the stamp
+        // defaults to "not standalone" rather than to whatever was last published.
+        BuildInfo.IsStandalone.Should().BeFalse();
+        BuildInfo.UpdateAssetName.Should().Be(BuildInfo.FrameworkDependentAsset);
+    }
+
+    [Fact]
+    public void TheChecksumAssetIsAlwaysNamedAfterItsExecutable()
+    {
+        UpdateService.ChecksumNameFor("Anything.exe").Should().Be("Anything.exe.sha256");
+    }
+}
