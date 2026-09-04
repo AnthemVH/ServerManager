@@ -10,7 +10,7 @@ namespace ServerLauncher.App.Remote;
 /// stops it to match the current settings.
 /// </summary>
 [SupportedOSPlatform("windows")]
-public sealed class RemoteAccessService : IDisposable
+public sealed class RemoteAccessService : IAsyncDisposable
 {
     private readonly RemoteApiServer _server;
 
@@ -49,7 +49,7 @@ public sealed class RemoteAccessService : IDisposable
 
         if (!settings.RemoteAccess.Enabled)
         {
-            _server.Stop();
+            await _server.StopAsync().ConfigureAwait(false);
             return true;
         }
 
@@ -62,14 +62,14 @@ public sealed class RemoteAccessService : IDisposable
         {
             // A misconfigured listener must not take the app down; Settings shows why.
             LastError = ex.Message;
-            _server.Stop();
+            await _server.StopAsync().ConfigureAwait(false);
             return false;
         }
     }
 
-    public void Dispose()
+    public async ValueTask DisposeAsync()
     {
         Pairing.CancelPairing();
-        _server.Dispose();
+        await _server.DisposeAsync().ConfigureAwait(false);
     }
 }

@@ -38,13 +38,13 @@ public partial class PairingWindow : Window
 
     private void IssueCode()
     {
-        var address = _settings.ResolvePhoneAddress();
+        var address = _settings.ResolvePublicAddress();
 
         if (string.IsNullOrWhiteSpace(address))
         {
             ShowWarning(
-                "No address for phones is set and no Tailscale address was found. Set one in "
-                + "Settings, otherwise the app will not know where to connect.");
+                "No public address is set, so a device has nothing to connect to. Put your "
+                + "domain in Settings under Remote access.");
         }
 
         var code = _pairing.BeginPairing();

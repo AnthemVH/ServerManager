@@ -50,12 +50,57 @@ public static class UpdateInstaller
     }
 
     /// <summary>
+    /// Whether the ASP.NET Core shared framework is installed.
+    /// </summary>
+    /// <remarks>
+    /// The remote API runs on Kestrel, which makes Microsoft.AspNetCore.App a required
+    /// framework: without it the app does not start at all, and it cannot report why
+    /// because it never gets that far. Checked before an update is applied so a machine
+    /// missing it keeps the version it has rather than being left with a dead install and
+    /// stopped servers.
+    /// </remarks>
+    public static bool IsAspNetCoreRuntimeInstalled()
+    {
+        try
+        {
+            // The running process resolved it, so it is present by definition.
+            if (AppDomain.CurrentDomain.GetAssemblies()
+                .Any(a => a.GetName().Name == "Microsoft.AspNetCore"))
+            {
+                return true;
+            }
+
+            var root = Path.GetDirectoryName(typeof(object).Assembly.Location);
+            var shared = root is null
+                ? null
+                : Path.GetFullPath(Path.Combine(root, "..", "..", "Microsoft.AspNetCore.App"));
+
+            return shared is not null
+                   && Directory.Exists(shared)
+                   && Directory.EnumerateDirectories(shared).Any();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Cannot tell; do not block an update on a filesystem hiccup.
+            return true;
+        }
+    }
+
+    /// <summary>
     /// Checks the app can actually replace itself before anything is downloaded or any
     /// servers are stopped — failing after a shutdown would be far worse.
     /// </summary>
     public static bool CanSelfUpdate(out string reason)
     {
         reason = string.Empty;
+
+        if (!IsAspNetCoreRuntimeInstalled())
+        {
+            reason = "This update needs the ASP.NET Core Runtime, which is not installed. "
+                     + "Install the .NET 8 ASP.NET Core Runtime, then update. Without it the "
+                     + "new version would not start at all.";
+            return false;
+        }
 
         try
         {

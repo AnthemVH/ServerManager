@@ -340,7 +340,18 @@ public partial class App : Application
     {
         _watcherShutdown?.Set();
 
-        _remote?.Dispose();
+        // OnExit cannot await, and this is shutdown, so a bounded block is acceptable.
+        if (_remote is not null)
+        {
+            try
+            {
+                _remote.DisposeAsync().AsTask().Wait(TimeSpan.FromSeconds(6));
+            }
+            catch (AggregateException)
+            {
+                // Nothing useful to do while closing.
+            }
+        }
         _tray?.Dispose();
         _viewModel?.Dispose();
         _manager?.Dispose();

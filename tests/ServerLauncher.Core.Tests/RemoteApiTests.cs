@@ -64,12 +64,8 @@ public sealed class RemoteApiTests : IAsyncLifetime
             Path.Combine(_root, "audit.log")));
 
         var port = FreePort();
-        await _server.StartAsync(new RemoteAccessSettings
-        {
-            Enabled = true,
-            BindAddress = "127.0.0.1",
-            Port = port
-        });
+        // Loopback, so no certificate is needed and the tests stay hermetic.
+        await _server.StartAsync(new RemoteAccessSettings { Enabled = true, Port = port });
 
         _client = new HttpClient { BaseAddress = new Uri($"http://127.0.0.1:{port}") };
     }
@@ -77,7 +73,10 @@ public sealed class RemoteApiTests : IAsyncLifetime
     public Task DisposeAsync()
     {
         _client?.Dispose();
-        _server?.Stop();
+        if (_server is not null)
+        {
+            _server.StopAsync().GetAwaiter().GetResult();
+        }
         _manager?.Dispose();
 
         try

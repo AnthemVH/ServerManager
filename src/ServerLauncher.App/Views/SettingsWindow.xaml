@@ -58,32 +58,48 @@
                 <TextBlock Text="Remote access" Style="{StaticResource SectionHeading}" />
 
                 <TextBlock Style="{StaticResource Hint}" Margin="0,0,0,8"
-                           Text="Lets a paired phone view your servers and start, stop and restart them. Off unless you turn it on. Paired phones can never add a server or change a script path — only the servers you have already set up here can be controlled." />
+                           Text="Lets a paired phone or browser view your servers and start, stop and restart them. Off unless you turn it on. Paired devices can never add a server or change a script path — only the servers you have already set up here can be controlled." />
 
                 <CheckBox x:Name="RemoteEnabledBox" Content="Allow remote control from paired devices" />
 
-                <TextBlock Text="Port on this machine" Style="{StaticResource Label}" />
+                <TextBlock Text="Port" Style="{StaticResource Label}" />
                 <TextBox x:Name="RemotePortBox" Width="110" HorizontalAlignment="Left" />
-                <TextBlock Style="{StaticResource Hint}"
-                           Text="The API listens on 127.0.0.1 only. Publish it to your phone with Tailscale: run  tailscale serve --bg 8787  on this machine." />
 
-                <TextBlock Text="Address phones should connect to" Style="{StaticResource Label}" />
-                <TextBox x:Name="RemotePhoneAddressBox" FontFamily="{StaticResource Font.Mono}" FontSize="11.5" />
-                <TextBlock x:Name="TailscaleStatusText" Style="{StaticResource Hint}" />
+                <CheckBox x:Name="RemotePublishBox" Margin="0,12,0,0"
+                          Content="Publish to the network, not just this machine" />
+                <TextBlock Style="{StaticResource Hint}"
+                           Text="Off, it listens on 127.0.0.1 and only this machine can reach it. On, it listens on every interface, so with the port forwarded it is reachable from the internet — and then a device token is the only thing between a stranger and a service that starts processes. Repeated wrong tokens from one address are blocked for ten minutes." />
+
+                <TextBlock Text="Public address" Style="{StaticResource Label}" />
+                <TextBox x:Name="RemotePublicAddressBox" FontFamily="{StaticResource Font.Mono}" FontSize="11.5" />
+                <TextBlock Style="{StaticResource Hint}"
+                           Text="The address people use, for example https://servers.example.com. Shown when pairing so a device knows where to connect." />
+
+                <TextBlock Text="TLS certificate" Style="{StaticResource SectionHeading}" />
+                <TextBlock Style="{StaticResource Hint}" Margin="0,0,0,6"
+                           Text="Required to publish. Without it your device tokens would cross the internet in clear text, so publishing is refused until one is set." />
+
+                <TextBlock Text="Certificate thumbprint" Style="{StaticResource Label}" />
+                <TextBox x:Name="CertThumbprintBox" FontFamily="{StaticResource Font.Mono}" FontSize="11.5" />
+                <TextBlock Style="{StaticResource Hint}"
+                           Text="For a certificate already installed on this machine, which is where a tool like win-acme puts a Let's Encrypt certificate and keeps it renewed. Nothing to type again and no password anywhere." />
+
+                <TextBlock Text="Or a .pfx file" Style="{StaticResource Label}" />
+                <TextBox x:Name="CertPathBox" FontFamily="{StaticResource Font.Mono}" FontSize="11.5" />
+                <TextBlock Style="{StaticResource Hint}"
+                           Text="If it has a password, put the password in a SERVERMANAGER_CERT_PASSWORD environment variable. It is deliberately not stored in settings, so no credential ends up in a plaintext file." />
+
+                <TextBlock x:Name="CertStatusText" Style="{StaticResource Hint}" Margin="0,8,0,0" />
 
                 <TextBlock x:Name="RemoteStatusText" Style="{StaticResource Hint}" Margin="0,8,0,0" />
 
                 <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
-                    <Button Content="Pair a phone" Style="{StaticResource PrimaryButton}"
+                    <Button Content="Pair a device" Style="{StaticResource PrimaryButton}"
                             Click="OnPairDevice" />
                     <Button Content="Open in browser" Style="{StaticResource ToolButton}"
-                            Click="OnOpenBrowser"
-                            ToolTip="Opens the same interface your phone uses, on this machine" />
-                    <Button Content="Copy serve command" Style="{StaticResource ToolButton}"
-                            Click="OnCopyServeCommand" Margin="0" />
+                            Click="OnOpenBrowser" Margin="0"
+                            ToolTip="Opens the same interface a phone uses, on this machine" />
                 </StackPanel>
-                <TextBlock Style="{StaticResource Hint}"
-                           Text="The browser interface runs on this machine at the address shown above. To reach it from a phone, publish that port with Tailscale Serve and use the address Tailscale prints." />
 
                 <TextBlock Text="Paired devices" Style="{StaticResource Label}" Margin="0,16,0,4" />
                 <Border Background="{StaticResource Bg.Panel}" CornerRadius="4" Padding="4"

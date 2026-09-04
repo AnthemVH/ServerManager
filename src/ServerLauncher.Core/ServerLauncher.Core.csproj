@@ -7,6 +7,16 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- Kestrel. The remote API has to listen on a public address with TLS, and
+         HttpListener cannot: http.sys refuses any prefix but loopback without a URL
+         reservation made by an administrator, and needs a second admin step to attach a
+         certificate. ServerManager runs unelevated so it can replace its own executable
+         when updating. The cost is that the machine needs the ASP.NET Core runtime as
+         well as the Desktop one; the updater checks for it before installing. -->
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
     <!-- Embedded rather than copied beside the exe: the app ships as a single file, and
          an asset read from disk would be one more thing that can go missing. -->
     <EmbeddedResource Include="Remote\WebUI\index.html" />

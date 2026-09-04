@@ -549,7 +549,7 @@ public sealed class UiSmokeTests : IDisposable
             var pairing = new PairingService(devices);
 
             var settings = new AppSettings();
-            settings.RemoteAccess.PhoneAddress = "http://100.101.102.103:8787";
+            settings.RemoteAccess.PublicAddress = "https://servers.example.com";
 
             var window = (PairingWindow)Offscreen(new PairingWindow(pairing, settings));
             try

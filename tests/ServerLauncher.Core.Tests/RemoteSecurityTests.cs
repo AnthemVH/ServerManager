@@ -296,88 +296,90 @@ public sealed class PairingServiceTests : IDisposable
     }
 }
 
-/// <summary>Covers the rule that the API must never be exposed carelessly.</summary>
-public class BindAddressTests
+/// <summary>Covers the rules that stop the API being exposed carelessly.</summary>
+public class PublishingRulesTests
 {
     [Fact]
-    public void ListeningOnAllInterfacesIsRefusedByDefault()
+    public void LoopbackNeedsNoCertificate()
     {
-        var settings = new RemoteAccessSettings { BindAddress = "0.0.0.0" };
+        // The default only listens to this machine, so there is nothing on the wire to
+        // protect and nothing to configure.
+        var act = () => RemoteApiServer.Validate(new RemoteAccessSettings { Enabled = true });
 
-        var act = () => RemoteApiServer.ResolveBindAddress(settings);
-
-        act.Should().Throw<InvalidOperationException>().WithMessage("*all interfaces*");
+        act.Should().NotThrow();
     }
 
     [Fact]
-    public void AnOrdinaryLanAddressIsRefusedByDefault()
+    public void PublishingWithoutACertificateIsRefused()
     {
-        // A LAN address is routable from the rest of the network and, behind a forwarded
-        // port, from the internet. It needs the same deliberate opt-in.
-        var settings = new RemoteAccessSettings { BindAddress = "192.168.1.50" };
+        // Without TLS the device token would cross the internet in clear text. Refusing is
+        // the only sensible answer; there is no plaintext fallback to offer.
+        var settings = new RemoteAccessSettings { Enabled = true, PublishDirectly = true };
 
-        var act = () => RemoteApiServer.ResolveBindAddress(settings);
+        var act = () => RemoteApiServer.Validate(settings);
 
-        act.Should().Throw<InvalidOperationException>().WithMessage("*not a Tailscale address*");
+        act.Should().Throw<InvalidOperationException>().WithMessage("*requires a TLS certificate*");
     }
 
     [Fact]
-    public void AnEmptyBindAddressMeansLoopback()
-    {
-        // The default configuration binds nothing routable; Tailscale Serve publishes it.
-        RemoteApiServer.ResolveBindAddress(new RemoteAccessSettings())
-            .Should().Be(IPAddress.Loopback);
-    }
-
-    [Fact]
-    public void ATailscaleAddressIsAccepted()
-    {
-        var settings = new RemoteAccessSettings { BindAddress = "100.101.102.103" };
-
-        RemoteApiServer.ResolveBindAddress(settings).Should().Be(IPAddress.Parse("100.101.102.103"));
-    }
-
-    [Fact]
-    public void LoopbackIsAlwaysAllowed()
-    {
-        // Reachable only from this machine, so it needs no override.
-        var settings = new RemoteAccessSettings { BindAddress = "127.0.0.1" };
-
-        RemoteApiServer.ResolveBindAddress(settings).Should().Be(IPAddress.Loopback);
-    }
-
-    [Fact]
-    public void TheOverrideAllowsANonTailscaleAddress()
+    public void PublishingWithACertificateIsAllowed()
     {
         var settings = new RemoteAccessSettings
         {
-            BindAddress = "192.168.1.50",
-            AllowNonTailscaleBinding = true
+            Enabled = true,
+            PublishDirectly = true,
+            CertificateThumbprint = "AABBCCDDEEFF00112233445566778899AABBCCDD"
         };
 
-        RemoteApiServer.ResolveBindAddress(settings).Should().Be(IPAddress.Parse("192.168.1.50"));
-    }
+        var act = () => RemoteApiServer.Validate(settings);
 
-    [Fact]
-    public void NonsenseAddressesAreRejected()
-    {
-        var settings = new RemoteAccessSettings { BindAddress = "not an address" };
-
-        var act = () => RemoteApiServer.ResolveBindAddress(settings);
-
-        act.Should().Throw<InvalidOperationException>().WithMessage("*not a valid IP address*");
+        act.Should().NotThrow();
     }
 
     [Theory]
-    [InlineData("100.64.0.1", true)]
-    [InlineData("100.127.255.254", true)]
-    [InlineData("100.100.50.20", true)]
-    [InlineData("100.63.255.255", false)]
-    [InlineData("100.128.0.1", false)]
-    [InlineData("192.168.0.1", false)]
-    [InlineData("10.0.0.1", false)]
-    public void TheTailscaleRangeIsRecognisedCorrectly(string address, bool expected)
+    [InlineData(0)]
+    [InlineData(-1)]
+    [InlineData(70000)]
+    public void ImpossiblePortsAreRejected(int port)
     {
-        TailscaleDetector.IsTailscaleAddress(address).Should().Be(expected);
+        var act = () => RemoteApiServer.Validate(new RemoteAccessSettings { Port = port });
+
+        act.Should().Throw<InvalidOperationException>().WithMessage("*not a usable port*");
+    }
+
+    [Fact]
+    public void HasCertificateReflectsEitherWayOfConfiguringOne()
+    {
+        new RemoteAccessSettings().HasCertificate.Should().BeFalse();
+        new RemoteAccessSettings { CertificateThumbprint = "ABC" }.HasCertificate.Should().BeTrue();
+        new RemoteAccessSettings { CertificatePath = @"C:\cert.pfx" }.HasCertificate.Should().BeTrue();
+    }
+
+    [Fact]
+    public void APublicAddressIsHandedToPairingDevices()
+    {
+        var settings = new RemoteAccessSettings
+        {
+            PublishDirectly = true,
+            PublicAddress = "https://servers.example.com/"
+        };
+
+        // Trailing slash trimmed, since the client appends its own paths.
+        settings.ResolvePublicAddress().Should().Be("https://servers.example.com");
+    }
+
+    [Fact]
+    public void WithoutAPublicAddressLoopbackIsOffered()
+    {
+        new RemoteAccessSettings { Port = 8787 }.ResolvePublicAddress()
+            .Should().Be("http://127.0.0.1:8787");
+    }
+
+    [Fact]
+    public void PublishingWithNoPublicAddressOffersNothingRatherThanLoopback()
+    {
+        // Handing a phone "127.0.0.1" would be worse than admitting we do not know.
+        new RemoteAccessSettings { PublishDirectly = true }.ResolvePublicAddress()
+            .Should().BeEmpty();
     }
 }

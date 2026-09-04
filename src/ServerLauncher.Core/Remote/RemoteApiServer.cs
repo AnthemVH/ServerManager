@@ -2,321 +2,247 @@ using System.Net;
 using System.Reflection;
 using System.Runtime.Versioning;
 using System.Text;
-using System.Text.Json;
-using System.Text.Json.Serialization;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.Logging;
 using ServerLauncher.Core.Models;
 using ServerLauncher.Core.Supervision;
 
 namespace ServerLauncher.Core.Remote;
 
 /// <summary>
-/// Hosts the remote control API.
+/// Hosts the remote control API and the browser interface.
 /// </summary>
 /// <remarks>
 /// <para>
-/// Uses <see cref="HttpListener"/> and binds loopback by default. Kestrel was tried and
-/// rejected: it needs a framework reference to Microsoft.AspNetCore.App, which becomes a
-/// <em>required framework</em> in the app's runtimeconfig. The app would then refuse to
-/// start on any machine without the ASP.NET Core runtime — including every existing
-/// install the moment it auto-updated, leaving a dead app and stopped servers with no way
-/// to warn anyone. Not worth it for a feature most installs will never switch on.
+/// Kestrel, because this has to listen on a public address with TLS. HttpListener runs on
+/// http.sys, which refuses any prefix but loopback without a URL reservation created by an
+/// administrator and needs a second admin step to attach a certificate to the port;
+/// ServerManager runs unelevated so it can replace its own executable when updating.
+/// Kestrel binds the socket itself and takes a certificate directly.
 /// </para>
 /// <para>
-/// Loopback also sidesteps http.sys URL reservations, which would otherwise demand
-/// administrator rights that this app deliberately does not take. Tailscale Serve
-/// publishes the local port onto the tailnet, which is what makes it reachable from a
-/// phone — and it terminates TLS with a real Tailscale-issued certificate on the way.
+/// The cost is that Microsoft.AspNetCore.App becomes a required framework, so the machine
+/// needs the ASP.NET Core runtime as well as the Desktop one. The updater checks for it
+/// before installing, so an update cannot leave an install unable to start.
 /// </para>
 /// <para>
-/// The API can start, stop and inspect servers that already exist. There is no endpoint
-/// that creates or edits one, because this app launches arbitrary scripts: an endpoint
-/// that could set a script path would turn a leaked token into remote code execution.
+/// The API can start, stop and inspect servers that already exist. It has no endpoint that
+/// creates or edits one, because this app launches arbitrary scripts: an endpoint that
+/// could set a script path would turn a leaked token into remote code execution.
 /// </para>
 /// </remarks>
 [SupportedOSPlatform("windows")]
-public sealed class RemoteApiServer : IDisposable
+public sealed class RemoteApiServer : IAsyncDisposable
 {
-    private static readonly JsonSerializerOptions Json = new()
-    {
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
-    };
+    private const string DeviceItemKey = "ServerLauncher.Device";
 
     private readonly ServerManager _manager;
     private readonly DeviceStore _devices;
     private readonly PairingService _pairing;
     private readonly RemoteAuditLog _audit;
+    private readonly AccessThrottle _throttle;
 
-    private HttpListener? _listener;
-    private CancellationTokenSource? _shutdown;
-    private Task? _loop;
+    private WebApplication? _app;
 
     public RemoteApiServer(
         ServerManager manager,
         DeviceStore devices,
         PairingService pairing,
-        RemoteAuditLog audit)
+        RemoteAuditLog audit,
+        AccessThrottle? throttle = null)
     {
         _manager = manager;
         _devices = devices;
         _pairing = pairing;
         _audit = audit;
+        _throttle = throttle ?? new AccessThrottle();
     }
 
-    public bool IsRunning => _listener?.IsListening == true;
+    public bool IsRunning => _app is not null;
 
     /// <summary>Where the API is listening, for display in Settings.</summary>
     public string? ListeningOn { get; private set; }
 
-    /// <summary>
-    /// Resolves the address to listen on, refusing anything reachable beyond this machine
-    /// unless the user has explicitly opted in.
-    /// </summary>
-    /// <exception cref="InvalidOperationException">The configuration is not safe to bind.</exception>
-    public static IPAddress ResolveBindAddress(RemoteAccessSettings settings)
+    /// <summary>Checks the configuration is coherent before anything is bound.</summary>
+    /// <exception cref="InvalidOperationException">It is not safe or possible to listen.</exception>
+    public static void Validate(RemoteAccessSettings settings)
     {
         ArgumentNullException.ThrowIfNull(settings);
 
-        if (string.IsNullOrWhiteSpace(settings.BindAddress))
+        if (settings.Port is < 1 or > 65535)
         {
-            return IPAddress.Loopback;
+            throw new InvalidOperationException($"{settings.Port} is not a usable port.");
         }
 
-        if (!IPAddress.TryParse(settings.BindAddress.Trim(), out var address))
+        if (!settings.PublishDirectly)
         {
-            throw new InvalidOperationException(
-                $"'{settings.BindAddress}' is not a valid IP address.");
+            return;
         }
 
-        if (address.Equals(IPAddress.Any) && !settings.AllowNonTailscaleBinding)
-        {
-            throw new InvalidOperationException(
-                "Listening on all interfaces would expose server control to every network "
-                + "this machine is on. Enable the explicit override in Settings if that is "
-                + "really what you want.");
-        }
-
-        if (IPAddress.IsLoopback(address))
-        {
-            return address;
-        }
-
-        if (!TailscaleDetector.IsTailscaleAddress(address) && !settings.AllowNonTailscaleBinding)
+        // Publishing without TLS would put device tokens on the wire in clear text for
+        // anyone on the path. There is no version of that worth offering.
+        if (!settings.HasCertificate)
         {
             throw new InvalidOperationException(
-                $"{address} is not a Tailscale address. Binding outside the tailnet removes "
-                + "the network layer protecting this API; enable the explicit override in "
-                + "Settings to allow it.");
+                "Publishing directly requires a TLS certificate. Set a certificate "
+                + "thumbprint or a .pfx path before turning it on.");
         }
-
-        return address;
     }
 
-    public Task StartAsync(RemoteAccessSettings settings)
+    public async Task StartAsync(RemoteAccessSettings settings)
     {
         ArgumentNullException.ThrowIfNull(settings);
+        Validate(settings);
 
-        Stop();
-
-        var address = ResolveBindAddress(settings);
-        var prefix = $"http://{address}:{settings.Port}/";
-
-        var listener = new HttpListener();
-        listener.Prefixes.Add(prefix);
-
-        try
+        if (_app is not null)
         {
-            listener.Start();
-        }
-        catch (HttpListenerException ex)
-        {
-            listener.Close();
-
-            // Binding anything but loopback goes through http.sys, which requires a URL
-            // reservation made by an administrator. Say so, and point at the way round it.
-            throw new InvalidOperationException(
-                IPAddress.IsLoopback(address)
-                    ? $"Could not listen on {prefix}: {ex.Message}"
-                    : $"Windows refused to let ServerManager listen on {prefix}. Binding an "
-                      + "address other than 127.0.0.1 needs an administrator to reserve the "
-                      + "URL. Leave the bind address empty and publish the local port with "
-                      + "Tailscale Serve instead.",
-                ex);
+            await StopAsync().ConfigureAwait(false);
         }
 
-        _listener = listener;
-        _shutdown = new CancellationTokenSource();
-        ListeningOn = prefix;
+        var builder = WebApplication.CreateSlimBuilder();
+        builder.Logging.ClearProviders();
 
-        _loop = Task.Run(() => AcceptLoopAsync(listener, _shutdown.Token));
+        var address = settings.PublishDirectly ? IPAddress.Any : IPAddress.Loopback;
 
-        return Task.CompletedTask;
+        builder.WebHost.ConfigureKestrel(options =>
+        {
+            options.Listen(address, settings.Port, listen =>
+            {
+                if (settings.PublishDirectly)
+                {
+                    listen.UseHttps(CertificateResolver.Resolve(settings));
+                }
+            });
+
+            // Everything here is a small JSON document or one HTML page.
+            options.Limits.MaxRequestBodySize = 64 * 1024;
+
+            // Slow-loris style connections should not be able to pile up.
+            options.Limits.KeepAliveTimeout = TimeSpan.FromSeconds(60);
+            options.Limits.RequestHeadersTimeout = TimeSpan.FromSeconds(15);
+
+            // Do not advertise what this is to whatever scans the port.
+            options.AddServerHeader = false;
+        });
+
+        var app = builder.Build();
+
+        app.Use(GateAsync);
+        MapEndpoints(app);
+
+        await app.StartAsync().ConfigureAwait(false);
+
+        _app = app;
+
+        var scheme = settings.PublishDirectly ? "https" : "http";
+        var host = settings.PublishDirectly ? "0.0.0.0" : "127.0.0.1";
+        ListeningOn = $"{scheme}://{host}:{settings.Port}";
     }
 
-    public void Stop()
+    public async Task StopAsync()
     {
-        var listener = _listener;
-        var shutdown = _shutdown;
-
-        _listener = null;
-        _shutdown = null;
+        var app = _app;
+        _app = null;
         ListeningOn = null;
 
-        if (listener is null)
+        if (app is null)
         {
             return;
         }
 
         try
         {
-            shutdown?.Cancel();
-            listener.Stop();
-            listener.Close();
+            using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            await app.StopAsync(deadline.Token).ConfigureAwait(false);
+            await app.DisposeAsync().ConfigureAwait(false);
         }
-        catch (Exception ex) when (ex is ObjectDisposedException or HttpListenerException)
-        {
-        }
-        finally
-        {
-            shutdown?.Dispose();
-        }
-    }
-
-    private async Task AcceptLoopAsync(HttpListener listener, CancellationToken cancellationToken)
-    {
-        while (!cancellationToken.IsCancellationRequested && listener.IsListening)
-        {
-            HttpListenerContext context;
-
-            try
-            {
-                context = await listener.GetContextAsync().ConfigureAwait(false);
-            }
-            catch (Exception ex) when (ex is HttpListenerException or ObjectDisposedException)
-            {
-                return;
-            }
-
-            // Each request is handled off the accept loop so one slow client cannot stall
-            // the others.
-            _ = Task.Run(async () =>
-            {
-                try
-                {
-                    await HandleAsync(context).ConfigureAwait(false);
-                }
-                catch (Exception)
-                {
-                    TrySetStatus(context, HttpStatusCode.InternalServerError);
-                }
-                finally
-                {
-                    try
-                    {
-                        context.Response.Close();
-                    }
-                    catch (Exception)
-                    {
-                    }
-                }
-            }, cancellationToken);
-        }
-    }
-
-    private static void TrySetStatus(HttpListenerContext context, HttpStatusCode status)
-    {
-        try
-        {
-            context.Response.StatusCode = (int)status;
-        }
-        catch (Exception)
+        catch (Exception ex) when (ex is ObjectDisposedException or OperationCanceledException)
         {
         }
     }
 
-    // --- Request handling ---
+    // --- Gate: throttling, then authentication ---
 
-    private async Task HandleAsync(HttpListenerContext context)
+    private async Task GateAsync(HttpContext context, RequestDelegate next)
     {
-        var path = context.Request.Url?.AbsolutePath.TrimEnd('/') ?? string.Empty;
-        var method = context.Request.HttpMethod;
-        var segments = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        var caller = context.Connection.RemoteIpAddress?.ToString();
 
-        // Anything that is not the API is the browser interface. Only the one embedded
-        // page is ever served — nothing maps a request path onto the filesystem, so there
-        // is no traversal to get wrong.
-        if (segments.Length == 0 || segments[0] != "api")
+        if (_throttle.IsBlocked(caller))
         {
-            await ServeWebInterfaceAsync(context, path, method).ConfigureAwait(false);
-            return;
-        }
-
-        // /api/v1/...
-        if (segments.Length < 3 || segments[1] != "v1")
-        {
-            await WriteAsync(context, HttpStatusCode.NotFound, new ApiError("No such endpoint."))
+            var remaining = _throttle.RemainingBlock(caller);
+            context.Response.StatusCode = StatusCodes.Status429TooManyRequests;
+            context.Response.Headers["Retry-After"] = ((int)remaining.TotalSeconds).ToString();
+            await context.Response
+                .WriteAsJsonAsync(new ApiError("Too many failed attempts. Try again later."))
                 .ConfigureAwait(false);
             return;
         }
 
-        var route = segments[2..];
+        var path = context.Request.Path.Value ?? "/";
 
-        if (route[0] == "pair")
+        // The browser interface itself is public: it holds no data, and pairing has to be
+        // reachable before any token exists.
+        if (!path.StartsWith("/api/", StringComparison.Ordinal))
         {
-            await HandlePairAsync(context, method).ConfigureAwait(false);
+            await ServeWebInterfaceAsync(context, path).ConfigureAwait(false);
             return;
         }
 
-        var device = Authenticate(context);
+        if (path.StartsWith("/api/v1/pair", StringComparison.Ordinal))
+        {
+            await next(context).ConfigureAwait(false);
+            return;
+        }
+
+        var header = context.Request.Headers.Authorization.ToString();
+        var token = header.StartsWith("Bearer ", StringComparison.Ordinal)
+            ? header["Bearer ".Length..].Trim()
+            : null;
+
+        var device = _devices.Authenticate(token);
+
         if (device is null)
         {
-            await WriteAsync(context, HttpStatusCode.Unauthorized, new ApiError("Unauthorized"))
-                .ConfigureAwait(false);
+            _throttle.RecordFailure(caller);
+            context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+            await context.Response.WriteAsJsonAsync(new ApiError("Unauthorized")).ConfigureAwait(false);
             return;
         }
 
+        _throttle.RecordSuccess(caller);
+        context.Items[DeviceItemKey] = device;
         _devices.TouchLastSeen(device.Id);
 
-        switch (route)
-        {
-            case ["health"] when method == "GET":
-                await RequireThen(context, device, DeviceCapabilities.View, HandleHealthAsync)
-                    .ConfigureAwait(false);
-                return;
-
-            case ["servers"] when method == "GET":
-                await RequireThen(context, device, DeviceCapabilities.View, HandleListAsync)
-                    .ConfigureAwait(false);
-                return;
-
-            case ["servers", var id] when method == "GET":
-                await RequireThen(context, device, DeviceCapabilities.View,
-                    ctx => HandleDetailAsync(ctx, id)).ConfigureAwait(false);
-                return;
-
-            case ["servers", var id, "console"] when method == "GET":
-                await RequireThen(context, device, DeviceCapabilities.ReadConsole,
-                    ctx => HandleConsoleAsync(ctx, id)).ConfigureAwait(false);
-                return;
-
-            case ["servers", var id, "command"] when method == "POST":
-                // The sharpest endpoint: arbitrary input to a running game server. It has
-                // its own capability, which paired devices do not get by default.
-                await RequireThen(context, device, DeviceCapabilities.SendCommands,
-                    ctx => HandleCommandAsync(ctx, id, device)).ConfigureAwait(false);
-                return;
-
-            case ["servers", var id, var action] when method == "POST":
-                await RequireThen(context, device, DeviceCapabilities.Control,
-                    ctx => HandleActionAsync(ctx, id, action, device)).ConfigureAwait(false);
-                return;
-
-            default:
-                await WriteAsync(context, HttpStatusCode.NotFound, new ApiError("No such endpoint."))
-                    .ConfigureAwait(false);
-                return;
-        }
+        await next(context).ConfigureAwait(false);
     }
+
+    private static PairedDevice Device(HttpContext context) => (PairedDevice)context.Items[DeviceItemKey]!;
+
+    private static async Task<bool> RequireAsync(HttpContext context, DeviceCapabilities capability)
+    {
+        if (Device(context).Can(capability))
+        {
+            return true;
+        }
+
+        context.Response.StatusCode = StatusCodes.Status403Forbidden;
+        await context.Response
+            .WriteAsJsonAsync(new ApiError($"This device is not permitted to {Describe(capability)}."))
+            .ConfigureAwait(false);
+
+        return false;
+    }
+
+    private static string Describe(DeviceCapabilities capability) => capability switch
+    {
+        DeviceCapabilities.View => "view servers",
+        DeviceCapabilities.Control => "start or stop servers",
+        DeviceCapabilities.ReadConsole => "read console output",
+        DeviceCapabilities.SendCommands => "send console commands",
+        _ => "perform that action"
+    };
 
     // --- Browser interface ---
 
@@ -340,264 +266,249 @@ public sealed class RemoteApiServer : IDisposable
     });
 
     /// <summary>
-    /// Serves the single-page browser interface.
+    /// Serves the single-page browser interface. Only this one embedded page is ever
+    /// returned, so no request path is turned into a file path and there is no traversal
+    /// to get wrong.
     /// </summary>
-    /// <remarks>
-    /// The page itself needs no authentication — it holds no data, and pairing has to be
-    /// reachable before a token exists. Everything it displays comes from the API, which
-    /// still demands a device token for every request.
-    /// </remarks>
-    private static async Task ServeWebInterfaceAsync(
-        HttpListenerContext context, string path, string method)
+    private static async Task ServeWebInterfaceAsync(HttpContext context, string path)
     {
-        if (method != "GET" && method != "HEAD")
+        if (context.Request.Method is not ("GET" or "HEAD"))
         {
-            await WriteAsync(context, HttpStatusCode.MethodNotAllowed,
-                new ApiError("Only GET is served here.")).ConfigureAwait(false);
+            context.Response.StatusCode = StatusCodes.Status405MethodNotAllowed;
             return;
         }
 
-        // The interface is one page; treat "/" and "/index.html" as it, and anything else
-        // as missing rather than trying to resolve it.
         var normalised = path.Trim('/');
         if (normalised.Length != 0
             && !normalised.Equals("index.html", StringComparison.OrdinalIgnoreCase))
         {
-            context.Response.StatusCode = (int)HttpStatusCode.NotFound;
+            context.Response.StatusCode = StatusCodes.Status404NotFound;
             return;
         }
 
         var payload = WebPage.Value;
 
-        context.Response.StatusCode = (int)HttpStatusCode.OK;
+        context.Response.StatusCode = StatusCodes.Status200OK;
         context.Response.ContentType = "text/html; charset=utf-8";
-        context.Response.ContentLength64 = payload.Length;
+        context.Response.ContentLength = payload.Length;
 
-        // The page is rebuilt with each release, so it must not be cached across updates.
+        // Rebuilt with each release, so it must not be cached across updates.
         context.Response.Headers["Cache-Control"] = "no-store";
 
-        if (method == "HEAD")
+        // The page loads nothing from anywhere else and is never framed.
+        context.Response.Headers["Content-Security-Policy"] =
+            "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; "
+            + "connect-src 'self'; frame-ancestors 'none'; base-uri 'none'";
+        context.Response.Headers["X-Content-Type-Options"] = "nosniff";
+        context.Response.Headers["Referrer-Policy"] = "no-referrer";
+
+        if (context.Request.Method == "HEAD")
         {
             return;
         }
 
-        await context.Response.OutputStream.WriteAsync(payload).ConfigureAwait(false);
+        await context.Response.Body.WriteAsync(payload).ConfigureAwait(false);
     }
 
-    private PairedDevice? Authenticate(HttpListenerContext context)
-    {
-        var header = context.Request.Headers["Authorization"] ?? string.Empty;
-        var token = header.StartsWith("Bearer ", StringComparison.Ordinal)
-            ? header["Bearer ".Length..].Trim()
-            : null;
+    // --- Routing ---
 
-        return _devices.Authenticate(token);
-    }
-
-    private static async Task RequireThen(
-        HttpListenerContext context,
-        PairedDevice device,
-        DeviceCapabilities capability,
-        Func<HttpListenerContext, Task> handler)
+    private void MapEndpoints(WebApplication app)
     {
-        if (!device.Can(capability))
+        app.MapPost("/api/v1/pair", async (HttpContext context, PairRequest request) =>
         {
-            await WriteAsync(context, HttpStatusCode.Forbidden,
-                new ApiError($"This device is not permitted to {Describe(capability)}."))
-                .ConfigureAwait(false);
-            return;
-        }
+            var caller = context.Connection.RemoteIpAddress?.ToString();
 
-        await handler(context).ConfigureAwait(false);
-    }
+            var result = _pairing.Redeem(
+                request.Code, request.DeviceName ?? "Device", DeviceCapabilities.Default);
 
-    private static string Describe(DeviceCapabilities capability) => capability switch
-    {
-        DeviceCapabilities.View => "view servers",
-        DeviceCapabilities.Control => "start or stop servers",
-        DeviceCapabilities.ReadConsole => "read console output",
-        DeviceCapabilities.SendCommands => "send console commands",
-        _ => "perform that action"
-    };
+            if (!result.Success || result.Token is null || result.Device is null)
+            {
+                // A wrong code counts against the caller: pairing is reachable by anyone
+                // who can see the port.
+                _throttle.RecordFailure(caller);
 
-    // --- Endpoints ---
-
-    private async Task HandlePairAsync(HttpListenerContext context, string method)
-    {
-        if (method != "POST")
-        {
-            await WriteAsync(context, HttpStatusCode.MethodNotAllowed,
-                new ApiError("Pairing is a POST.")).ConfigureAwait(false);
-            return;
-        }
-
-        var request = await ReadAsync<PairRequest>(context).ConfigureAwait(false);
-
-        var result = _pairing.Redeem(
-            request?.Code, request?.DeviceName ?? "Android device", DeviceCapabilities.Default);
-
-        if (!result.Success || result.Token is null || result.Device is null)
-        {
-            await WriteAsync(context, HttpStatusCode.BadRequest,
-                new ApiError(result.Error ?? "Pairing failed.")).ConfigureAwait(false);
-            return;
-        }
-
-        _audit.Record(result.Device.Name, "Paired a new device");
-
-        await WriteAsync(context, HttpStatusCode.OK, new PairResponse(
-            result.Token,
-            result.Device.Id,
-            result.Device.Name,
-            CapabilityNames(result.Device.Capabilities))).ConfigureAwait(false);
-    }
-
-    private Task HandleListAsync(HttpListenerContext context) =>
-        WriteAsync(context, HttpStatusCode.OK, _manager.Instances.Select(Summarise).ToList());
-
-    private async Task HandleDetailAsync(HttpListenerContext context, string id)
-    {
-        var instance = FindServer(id);
-        if (instance is null)
-        {
-            await NotFoundAsync(context).ConfigureAwait(false);
-            return;
-        }
-
-        await WriteAsync(context, HttpStatusCode.OK, Summarise(instance)).ConfigureAwait(false);
-    }
-
-    private Task HandleHealthAsync(HttpListenerContext context)
-    {
-        var health = _manager.AppHealth;
-        var uptime = DateTimeOffset.Now - _manager.AppStartedAt;
-
-        return WriteAsync(context, HttpStatusCode.OK, new LauncherHealth(
-            health.CpuPercent,
-            health.WorkingSetMegabytes,
-            health.ManagedMemoryMegabytes,
-            health.ThreadCount,
-            health.HandleCount,
-            FormatDuration(uptime),
-            Assembly.GetEntryAssembly()?.GetName().Version?.ToString(3) ?? "unknown",
-            _manager.Instances.Count(i => i.State == ServerState.Running),
-            _manager.Instances.Count));
-    }
-
-    private async Task HandleConsoleAsync(HttpListenerContext context, string id)
-    {
-        var instance = FindServer(id);
-        if (instance is null)
-        {
-            await NotFoundAsync(context).ConfigureAwait(false);
-            return;
-        }
-
-        var requested = context.Request.QueryString["tail"];
-        var take = int.TryParse(requested, out var parsed) ? Math.Clamp(parsed, 1, 2000) : 200;
-
-        var lines = instance.ConsoleSnapshot()
-            .TakeLast(take)
-            .Select(l => new ConsoleLineDto(l.Timestamp.ToString("HH:mm:ss"), l.Stream.ToString(), l.Text))
-            .ToList();
-
-        await WriteAsync(context, HttpStatusCode.OK, new ConsoleResponse(id, lines)).ConfigureAwait(false);
-    }
-
-    private async Task HandleActionAsync(
-        HttpListenerContext context, string id, string action, PairedDevice device)
-    {
-        var instance = FindServer(id);
-        if (instance is null)
-        {
-            await NotFoundAsync(context).ConfigureAwait(false);
-            return;
-        }
-
-        switch (action.ToLowerInvariant())
-        {
-            case "start":
-                _audit.Record(device.Name, "Started server", instance.Definition.Name);
-                await instance.StartAsync().ConfigureAwait(false);
-                break;
-
-            case "stop":
-                _audit.Record(device.Name, "Stopped server", instance.Definition.Name);
-                await instance.StopAsync().ConfigureAwait(false);
-                break;
-
-            case "restart":
-                _audit.Record(device.Name, "Restarted server", instance.Definition.Name);
-                await instance.RestartAsync().ConfigureAwait(false);
-                break;
-
-            default:
-                await WriteAsync(context, HttpStatusCode.NotFound,
-                    new ApiError($"Unknown action '{action}'.")).ConfigureAwait(false);
+                context.Response.StatusCode = StatusCodes.Status400BadRequest;
+                await context.Response
+                    .WriteAsJsonAsync(new ApiError(result.Error ?? "Pairing failed."))
+                    .ConfigureAwait(false);
                 return;
-        }
+            }
 
-        await WriteAsync(context, HttpStatusCode.OK, new ActionResult(true, $"{action} requested."))
-            .ConfigureAwait(false);
-    }
+            _throttle.RecordSuccess(caller);
+            _audit.Record(result.Device.Name, $"Paired a new device from {caller ?? "unknown"}");
 
-    private async Task HandleCommandAsync(HttpListenerContext context, string id, PairedDevice device)
-    {
-        var instance = FindServer(id);
-        if (instance is null)
+            await context.Response.WriteAsJsonAsync(new PairResponse(
+                result.Token,
+                result.Device.Id,
+                result.Device.Name,
+                CapabilityNames(result.Device.Capabilities))).ConfigureAwait(false);
+        });
+
+        app.MapGet("/api/v1/servers", async context =>
         {
-            await NotFoundAsync(context).ConfigureAwait(false);
-            return;
-        }
+            if (!await RequireAsync(context, DeviceCapabilities.View).ConfigureAwait(false))
+            {
+                return;
+            }
 
-        var request = await ReadAsync<CommandRequest>(context).ConfigureAwait(false);
-
-        if (string.IsNullOrWhiteSpace(request?.Command))
-        {
-            await WriteAsync(context, HttpStatusCode.BadRequest, new ApiError("No command given."))
+            await context.Response
+                .WriteAsJsonAsync(_manager.Instances.Select(Summarise).ToList())
                 .ConfigureAwait(false);
-            return;
-        }
+        });
 
-        _audit.Record(device.Name, $"Sent command '{request.Command}'", instance.Definition.Name);
-        var sent = instance.SendCommand(request.Command);
+        app.MapGet("/api/v1/servers/{id}", async (HttpContext context, string id) =>
+        {
+            if (!await RequireAsync(context, DeviceCapabilities.View).ConfigureAwait(false))
+            {
+                return;
+            }
 
-        await WriteAsync(context, HttpStatusCode.OK, new ActionResult(
-            sent,
-            sent ? "Command sent." : "The server is not accepting console input.")).ConfigureAwait(false);
+            var instance = FindServer(id);
+            if (instance is null)
+            {
+                await NotFoundAsync(context).ConfigureAwait(false);
+                return;
+            }
+
+            await context.Response.WriteAsJsonAsync(Summarise(instance)).ConfigureAwait(false);
+        });
+
+        app.MapGet("/api/v1/health", async context =>
+        {
+            if (!await RequireAsync(context, DeviceCapabilities.View).ConfigureAwait(false))
+            {
+                return;
+            }
+
+            var health = _manager.AppHealth;
+            var uptime = DateTimeOffset.Now - _manager.AppStartedAt;
+
+            await context.Response.WriteAsJsonAsync(new LauncherHealth(
+                health.CpuPercent,
+                health.WorkingSetMegabytes,
+                health.ManagedMemoryMegabytes,
+                health.ThreadCount,
+                health.HandleCount,
+                FormatDuration(uptime),
+                Assembly.GetEntryAssembly()?.GetName().Version?.ToString(3) ?? "unknown",
+                _manager.Instances.Count(i => i.State == ServerState.Running),
+                _manager.Instances.Count)).ConfigureAwait(false);
+        });
+
+        app.MapGet("/api/v1/servers/{id}/console", async (HttpContext context, string id, int? tail) =>
+        {
+            if (!await RequireAsync(context, DeviceCapabilities.ReadConsole).ConfigureAwait(false))
+            {
+                return;
+            }
+
+            var instance = FindServer(id);
+            if (instance is null)
+            {
+                await NotFoundAsync(context).ConfigureAwait(false);
+                return;
+            }
+
+            var take = Math.Clamp(tail ?? 200, 1, 2000);
+            var lines = instance.ConsoleSnapshot()
+                .TakeLast(take)
+                .Select(l => new ConsoleLineDto(
+                    l.Timestamp.ToString("HH:mm:ss"), l.Stream.ToString(), l.Text))
+                .ToList();
+
+            await context.Response
+                .WriteAsJsonAsync(new ConsoleResponse(id, lines))
+                .ConfigureAwait(false);
+        });
+
+        app.MapPost("/api/v1/servers/{id}/command",
+            async (HttpContext context, string id, CommandRequest request) =>
+        {
+            // The sharpest endpoint: arbitrary input to a running game server. It has its
+            // own capability, which paired devices do not get by default.
+            if (!await RequireAsync(context, DeviceCapabilities.SendCommands).ConfigureAwait(false))
+            {
+                return;
+            }
+
+            var instance = FindServer(id);
+            if (instance is null)
+            {
+                await NotFoundAsync(context).ConfigureAwait(false);
+                return;
+            }
+
+            if (string.IsNullOrWhiteSpace(request.Command))
+            {
+                context.Response.StatusCode = StatusCodes.Status400BadRequest;
+                await context.Response
+                    .WriteAsJsonAsync(new ApiError("No command given."))
+                    .ConfigureAwait(false);
+                return;
+            }
+
+            var device = Device(context);
+            _audit.Record(device.Name, $"Sent command '{request.Command}'", instance.Definition.Name);
+
+            var sent = instance.SendCommand(request.Command);
+
+            await context.Response.WriteAsJsonAsync(new ActionResult(
+                sent,
+                sent ? "Command sent." : "The server is not accepting console input."))
+                .ConfigureAwait(false);
+        });
+
+        app.MapPost("/api/v1/servers/{id}/{action}", async (HttpContext context, string id, string action) =>
+        {
+            if (!await RequireAsync(context, DeviceCapabilities.Control).ConfigureAwait(false))
+            {
+                return;
+            }
+
+            var instance = FindServer(id);
+            if (instance is null)
+            {
+                await NotFoundAsync(context).ConfigureAwait(false);
+                return;
+            }
+
+            var device = Device(context);
+
+            switch (action.ToLowerInvariant())
+            {
+                case "start":
+                    _audit.Record(device.Name, "Started server", instance.Definition.Name);
+                    await instance.StartAsync().ConfigureAwait(false);
+                    break;
+
+                case "stop":
+                    _audit.Record(device.Name, "Stopped server", instance.Definition.Name);
+                    await instance.StopAsync().ConfigureAwait(false);
+                    break;
+
+                case "restart":
+                    _audit.Record(device.Name, "Restarted server", instance.Definition.Name);
+                    await instance.RestartAsync().ConfigureAwait(false);
+                    break;
+
+                default:
+                    context.Response.StatusCode = StatusCodes.Status404NotFound;
+                    await context.Response
+                        .WriteAsJsonAsync(new ApiError($"Unknown action '{action}'."))
+                        .ConfigureAwait(false);
+                    return;
+            }
+
+            await context.Response
+                .WriteAsJsonAsync(new ActionResult(true, $"{action} requested."))
+                .ConfigureAwait(false);
+        });
     }
 
-    // --- Plumbing ---
-
-    private static Task NotFoundAsync(HttpListenerContext context) =>
-        WriteAsync(context, HttpStatusCode.NotFound, new ApiError("No such server."));
-
-    private static async Task<T?> ReadAsync<T>(HttpListenerContext context)
+    private static async Task NotFoundAsync(HttpContext context)
     {
-        try
-        {
-            using var reader = new StreamReader(context.Request.InputStream, Encoding.UTF8);
-            var body = await reader.ReadToEndAsync().ConfigureAwait(false);
-
-            return string.IsNullOrWhiteSpace(body)
-                ? default
-                : JsonSerializer.Deserialize<T>(body, Json);
-        }
-        catch (Exception ex) when (ex is JsonException or IOException)
-        {
-            return default;
-        }
-    }
-
-    private static async Task WriteAsync<T>(HttpListenerContext context, HttpStatusCode status, T body)
-    {
-        var payload = JsonSerializer.SerializeToUtf8Bytes(body, Json);
-
-        context.Response.StatusCode = (int)status;
-        context.Response.ContentType = "application/json; charset=utf-8";
-        context.Response.ContentLength64 = payload.Length;
-
-        await context.Response.OutputStream.WriteAsync(payload).ConfigureAwait(false);
+        context.Response.StatusCode = StatusCodes.Status404NotFound;
+        await context.Response.WriteAsJsonAsync(new ApiError("No such server.")).ConfigureAwait(false);
     }
 
     private ServerInstance? FindServer(string id) =>
@@ -634,5 +545,5 @@ public sealed class RemoteApiServer : IDisposable
             .Select(c => c.ToString())
             .ToList();
 
-    public void Dispose() => Stop();
+    public async ValueTask DisposeAsync() => await StopAsync().ConfigureAwait(false);
 }

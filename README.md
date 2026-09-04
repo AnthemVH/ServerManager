@@ -51,13 +51,16 @@ copy's window back rather than reporting that it is already running.
 **Self-updating** — checks GitHub for new releases and installs them on your approval.
 
 **Phone control** — an Android app to view your servers, start and stop them, read their
-consoles and send commands, from anywhere over Tailscale. Off unless you turn it on.
+consoles and send commands, from a browser or an Android app. Off unless you turn it on,
+and it publishes to the internet only over TLS.
 
 ---
 
 ## Installing
 
-1. Install the [.NET 8 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/8.0).
+1. Install the [.NET 8 Desktop Runtime and the ASP.NET Core Runtime](https://dotnet.microsoft.com/download/dotnet/8.0).
+   Both are needed: the window uses one and the remote API uses the other. The app will
+   not start without them, and the updater refuses to install a version that would.
 2. Download `ServerLauncher.exe` from the
    [latest release](https://github.com/AnthemVH/ServerManager/releases/latest).
 3. Put it in a folder you own, such as `C:\ServerManager\`.
@@ -152,83 +155,82 @@ file back.
 
 ---
 
-## Controlling it from your phone
+## Controlling it from a phone or browser
 
 Off by default. The API can start, stop, restart and inspect **servers you have already
 configured**, and deliberately has no way to create one or change a script path — this app
-launches arbitrary scripts, so an endpoint that could set one would turn a stolen phone
-token into remote code execution rather than just an unwanted restart.
+launches arbitrary scripts, so an endpoint that could set one would turn a stolen token
+into remote code execution rather than just an unwanted restart.
 
-### From a browser, with nothing to install
+There is a browser interface and an Android app. Both use the same API, the same pairing,
+and the same revocation, so most people will only want the browser one: it needs nothing
+installed on the device.
 
-ServerManager serves a phone-sized web interface on the same address as the API. Once
-remote access is on, **Settings &rarr; Remote access &rarr; Open in browser** opens it on
-the server itself, and the tray menu has **Open browser interface** for when the window is
-hidden. Both go to:
+### On the machine itself
 
-```
-http://127.0.0.1:8787/
-```
+With remote access on, **Settings → Remote access → Open in browser** opens it, and the
+tray menu has **Open browser interface** for when the window is hidden. Both go to
+`http://127.0.0.1:8787/`, which only that machine can reach.
 
-To reach it from a phone, publish that port with Tailscale Serve (below) and use the
-address Tailscale prints.
+### Publishing it to the internet
 
-Pair it with the same code the desktop shows, and it works exactly like the app: the
-dashboard, start/stop/restart, consoles and commands. The browser appears in the paired
-device list and is revoked the same way. On Android or iOS, *Add to home screen* gives it
-an icon and its own window.
+To reach it from anywhere, tick **Publish to the network** and point a domain at the
+machine with the port forwarded.
 
-Nothing about it weakens the API. The page itself is served without a token — it has to
-be, since pairing happens on it — but it holds no data, and every request behind it still
-needs a device token.
+This requires a TLS certificate and refuses to start without one. That is not caution for
+its own sake: your device token is sent with every request, and over plain HTTP anyone on
+the path would be able to read it and then control your servers.
 
-### Setting it up
+Two ways to supply one, neither of which puts a password in a config file:
 
-1. Install [Tailscale](https://tailscale.com/) on the server and your phone, signed into
-   the same tailnet.
-2. In **Settings → Remote access**, tick *Allow remote control* and press Save.
-3. Run this once on the server, to publish the local port onto your tailnet:
+| Setting | Use |
+|---------|-----|
+| **Certificate thumbprint** | A certificate already installed on the machine. Simplest on Windows — a tool like [win-acme](https://www.win-acme.com/) obtains a Let's Encrypt certificate, installs it, and renews it, and ServerManager just names it. |
+| **.pfx path** | A certificate file. If it has a password, put that in a `SERVERMANAGER_CERT_PASSWORD` environment variable. |
 
-   ```
-   tailscale serve --bg 8787
-   ```
+Then set **Public address** to your domain, for example `https://servers.example.com`, so
+a device that pairs knows where to connect.
 
-   The Settings screen has a button that copies this command.
-4. Put the address Tailscale gives you into **Address phones should connect to**.
-5. Install the APK from the [latest release](https://github.com/AnthemVH/ServerManager/releases/latest)
-   on your phone, press **Pair a phone** on the desktop, and scan the QR code.
+**Be clear-eyed about what this means.** The port will be found and probed within hours of
+opening it. From then on the only thing between a stranger and a service that starts
+processes on your machine is a device token, so:
 
-The API listens on `127.0.0.1` only. Tailscale Serve is what makes it reachable, and it
-terminates TLS with a real Tailscale-issued certificate, so nothing is ever exposed to the
-open internet and no port is forwarded.
+- Tokens are 256 bits of randomness — not guessable in any practical sense.
+- Ten failed attempts from one address blocks that address for ten minutes. It is counted
+  per address, because a global counter would let anyone lock *you* out by failing enough
+  times.
+- Every remote action is recorded in an audit log and shown in the desktop console.
+- Revoke any device from Settings and it stops working immediately.
 
-### How access is controlled
+If you would rather not expose it at all, leave publishing off and put a VPN such as
+[Tailscale](https://tailscale.com/) or a reverse proxy in front of the loopback port
+instead.
 
-Security comes from a secret each install generates for itself, never from anything in this
-repository — your install and anyone else's have completely independent credentials.
+### Pairing
 
-- Pairing needs a **single-use code** that expires in five minutes, is rate limited, and
-  exists only while the pairing dialog is open.
-- Device tokens are 256 bits and stored **only as hashes**; the plaintext never touches disk.
-- Every device is listed in Settings and **revocable individually**, taking effect at once.
-- **Sending console commands is a separate permission**, off by default, granted per device.
-  It is arbitrary input to a game server, so it is not handed out at pairing.
-- Every remote action is written to an audit log and appears in the desktop console.
+Press **Pair a device** on the desktop. It shows a QR code and an eight-character code.
+Open your public address on the phone, or the APK, and enter that code.
+
+The code works once, expires in five minutes, and exists only while the pairing dialog is
+open — so a QR left on screen or caught in a screenshot cannot be used later.
+
+A newly paired device can view servers, control them, and read consoles. **Sending console
+commands is a separate permission**, off by default, granted per device in Settings,
+because it is arbitrary input to your game server.
 
 ### The Android app
 
 Sideloaded, not on the Play Store: download the APK from the release page and install it.
-It is built by CI, so nothing has to be installed on your development machine.
+It is built by CI on request rather than with every release, so an APK is only attached
+when the app itself has changed.
 
 The app polls every few seconds rather than holding a live connection, because Android
 suspends sockets as soon as an app leaves the foreground. That also means **it cannot give
-you instant crash alerts** — there is no cloud service to push from. Real push would need
-Firebase and a component the server talks out to, which is the hosting and trust question
-Tailscale was chosen to avoid.
+you instant crash alerts** — there is no cloud service to push from.
 
-The released APK is **debug-signed**, which is fine for sideloading onto your own phone but
-means it is marked debuggable. If you would rather it were not, add a release keystore to
-the repository secrets and switch the workflow to `assembleRelease`.
+The released APK is **debug-signed** unless you add a release keystore to the repository
+secrets, which is fine for sideloading onto your own phone but marks it debuggable.
+
 
 ## How it works
 
