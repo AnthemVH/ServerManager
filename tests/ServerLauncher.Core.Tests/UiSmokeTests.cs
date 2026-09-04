@@ -204,6 +204,161 @@ public sealed class UiSmokeTests : IDisposable
     }
 
     [WpfFact]
+    public void Dashboard_BindsCleanlyWithServersPresent()
+    {
+        // The dashboard is the default view, so a broken binding here is the first thing
+        // anyone would see on opening the app.
+        WpfHarness.RunOnUi(() =>
+        {
+            var manager = CreateIsolatedManager();
+            var viewModel = new MainViewModel(manager);
+
+            foreach (var name in new[] { "Alpha", "Bravo" })
+            {
+                manager.Add(new ServerDefinition
+                {
+                    Name = name,
+                    ScriptPath = Path.Combine(AppContext.BaseDirectory, "fixtures", "interactive.bat")
+                });
+            }
+
+            viewModel.SyncServers();
+            viewModel.IsDashboardVisible.Should().BeTrue("the dashboard is the default view");
+
+            using var collector = new BindingErrorCollector();
+
+            MainWindow? window = null;
+            try
+            {
+                window = (MainWindow)Offscreen(new MainWindow(viewModel));
+                window.Show();
+                WpfHarness.Pump(window);
+
+                AssertNoBindingErrors(collector, "Dashboard");
+            }
+            finally
+            {
+                if (window is not null)
+                {
+                    window.AllowClose = true;
+                    window.Close();
+                }
+
+                viewModel.Dispose();
+                manager.Dispose();
+            }
+        });
+    }
+
+    [WpfFact]
+    public void Dashboard_BindsCleanlyWithNoServers()
+    {
+        WpfHarness.RunOnUi(() =>
+        {
+            var manager = CreateIsolatedManager();
+            var viewModel = new MainViewModel(manager);
+            viewModel.SyncServers();
+
+            using var collector = new BindingErrorCollector();
+
+            MainWindow? window = null;
+            try
+            {
+                window = (MainWindow)Offscreen(new MainWindow(viewModel));
+                window.Show();
+                WpfHarness.Pump(window);
+
+                AssertNoBindingErrors(collector, "Dashboard empty state");
+            }
+            finally
+            {
+                if (window is not null)
+                {
+                    window.AllowClose = true;
+                    window.Close();
+                }
+
+                viewModel.Dispose();
+                manager.Dispose();
+            }
+        });
+    }
+
+    [WpfFact]
+    public void OpeningAServerFromTheDashboard_SelectsItAndSwitchesView()
+    {
+        WpfHarness.RunOnUi(() =>
+        {
+            var manager = CreateIsolatedManager();
+            var viewModel = new MainViewModel(manager);
+
+            manager.Add(new ServerDefinition
+            {
+                Name = "Alpha",
+                ScriptPath = Path.Combine(AppContext.BaseDirectory, "fixtures", "interactive.bat")
+            });
+
+            viewModel.SyncServers();
+
+            try
+            {
+                var target = viewModel.Servers.Single();
+                viewModel.OpenServerCommand.Execute(target);
+
+                viewModel.SelectedServer.Should().BeSameAs(target);
+                viewModel.IsDashboardVisible.Should().BeFalse("Open should show that server detail");
+
+                viewModel.ShowDashboardCommand.Execute(null);
+                viewModel.IsDashboardVisible.Should().BeTrue();
+            }
+            finally
+            {
+                viewModel.Dispose();
+                manager.Dispose();
+            }
+        });
+    }
+
+    [WpfFact]
+    public void DashboardTotals_CountServersAndTheirResources()
+    {
+        WpfHarness.RunOnUi(() =>
+        {
+            var manager = CreateIsolatedManager();
+            var viewModel = new MainViewModel(manager);
+
+            foreach (var name in new[] { "Alpha", "Bravo", "Charlie" })
+            {
+                manager.Add(new ServerDefinition
+                {
+                    Name = name,
+                    ScriptPath = Path.Combine(AppContext.BaseDirectory, "fixtures", "interactive.bat")
+                });
+            }
+
+            viewModel.SyncServers();
+
+            try
+            {
+                viewModel.TotalServerCount.Should().Be(3);
+                viewModel.RunningServerCount.Should().Be(0, "nothing has been started");
+                viewModel.RunningSummary.Should().Be("0 of 3 running");
+                viewModel.HasProblems.Should().BeFalse();
+
+                // Totals are a plain sum over the servers, so stopped ones contribute zero.
+                viewModel.TotalCpuPercent.Should().Be(0);
+                viewModel.TotalMemoryMegabytes.Should().Be(0);
+                viewModel.TotalProcessCount.Should().Be(0);
+            }
+            finally
+            {
+                viewModel.Dispose();
+                manager.Dispose();
+            }
+        });
+    }
+
+    [WpfFact]
     public void TrayIcon_IsCreatedWithoutAnyWindowBeingShown()
     {
         // The bug this guards: the tray icon used to live inside MainWindow's XAML, so it

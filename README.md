@@ -10,6 +10,11 @@ running in the tray so your servers stay up.
 
 ## Features
 
+**Dashboard** — every server on one screen, each with its status, CPU, memory, uptime,
+process count and CPU graph, plus start/stop/restart on each card. A summary strip totals
+CPU, memory and processes across all of them and shows how many are running. This is the
+landing view; **Servers** switches to the per-server console and settings.
+
 **Console and logs** — live stdout and stderr per server, colour-coded by stream, with an
 input box that sends commands straight to the running server. Full history is written to
 daily rolling log files, so nothing is lost when the on-screen buffer scrolls.

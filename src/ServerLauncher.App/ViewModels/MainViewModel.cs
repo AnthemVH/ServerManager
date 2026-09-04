@@ -33,6 +33,10 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     [ObservableProperty]
     private bool _autoScroll = true;
 
+    /// <summary>Dashboard replaces the list/detail split so every server is visible at once.</summary>
+    [ObservableProperty]
+    private bool _isDashboardVisible = true;
+
     // --- Updates ---
 
     [ObservableProperty]
@@ -96,6 +100,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             }
 
             RefreshAppUptime();
+            RefreshTotals();
         };
         _uptimeTimer.Start();
     }
@@ -137,6 +142,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         }
 
         OnPropertyChanged(nameof(HasServers));
+        RefreshTotals();
 
         SelectedServer ??= Servers.FirstOrDefault();
     }
@@ -164,6 +170,48 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
     private void OnBackupCompleted(ServerInstance instance, Core.Backup.BackupResult result) =>
         OnUiThread(() => StatusMessage = $"{instance.Definition.Name}: {result.Message}");
+
+    // --- Dashboard totals ---
+
+    public int RunningServerCount => Servers.Count(s => s.State is ServerState.Running);
+
+    public int TotalServerCount => Servers.Count;
+
+    /// <summary>Combined CPU of every running server, as a share of the whole machine.</summary>
+    public double TotalCpuPercent => Servers.Sum(s => s.CpuPercent);
+
+    public double TotalMemoryMegabytes => Servers.Sum(s => s.MemoryMegabytes);
+
+    public int TotalProcessCount => Servers.Sum(s => s.ProcessCount);
+
+    public int ProblemServerCount =>
+        Servers.Count(s => s.State is ServerState.Crashed or ServerState.Failed);
+
+    public string RunningSummary => $"{RunningServerCount} of {TotalServerCount} running";
+
+    public bool HasProblems => ProblemServerCount > 0;
+
+    public string ProblemSummary => ProblemServerCount == 1
+        ? "1 server needs attention"
+        : $"{ProblemServerCount} servers need attention";
+
+    /// <summary>
+    /// Recomputed on the shared one-second tick rather than on every sample: with a
+    /// handful of servers this is trivial, and it keeps the totals honest even when a
+    /// server stops and stops reporting.
+    /// </summary>
+    private void RefreshTotals()
+    {
+        OnPropertyChanged(nameof(RunningServerCount));
+        OnPropertyChanged(nameof(TotalServerCount));
+        OnPropertyChanged(nameof(TotalCpuPercent));
+        OnPropertyChanged(nameof(TotalMemoryMegabytes));
+        OnPropertyChanged(nameof(TotalProcessCount));
+        OnPropertyChanged(nameof(ProblemServerCount));
+        OnPropertyChanged(nameof(RunningSummary));
+        OnPropertyChanged(nameof(HasProblems));
+        OnPropertyChanged(nameof(ProblemSummary));
+    }
 
     // --- ServerManager's own resource use ---
 
@@ -400,6 +448,25 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
     [RelayCommand]
     private void ClearConsole() => SelectedServer?.ConsoleLines.Clear();
+
+    [RelayCommand]
+    private void ShowDashboard() => IsDashboardVisible = true;
+
+    [RelayCommand]
+    private void ShowServers() => IsDashboardVisible = false;
+
+    /// <summary>Jumps from a dashboard card to that server's console and settings.</summary>
+    [RelayCommand]
+    private void OpenServer(ServerViewModel? server)
+    {
+        if (server is null)
+        {
+            return;
+        }
+
+        SelectedServer = server;
+        IsDashboardVisible = false;
+    }
 
     // --- Updates ---
 

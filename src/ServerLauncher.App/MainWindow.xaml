@@ -42,6 +42,15 @@
                 </StackPanel>
 
                 <StackPanel Orientation="Horizontal">
+                    <Button Content="Dashboard" Style="{StaticResource ToolButton}"
+                            Command="{Binding ShowDashboardCommand}" />
+                    <Button Content="Servers" Style="{StaticResource ToolButton}"
+                            Command="{Binding ShowServersCommand}" />
+                    <Rectangle Width="1" Fill="{StaticResource Border.Subtle}" Margin="6,2,12,2" />
+                </StackPanel>
+
+                <StackPanel Orientation="Horizontal"
+                            Visibility="{Binding IsDashboardVisible, Converter={StaticResource BoolToVisibility}, ConverterParameter=Invert}">
                     <Button Content="▶  Start" Style="{StaticResource PrimaryButton}"
                             Command="{Binding StartCommand}"
                             IsEnabled="{Binding SelectedServer.CanStart, FallbackValue=False}" />
@@ -97,8 +106,9 @@
             </Grid>
         </Border>
 
-        <!-- Body -->
-        <Grid Grid.Row="2">
+        <!-- Body: servers view -->
+        <Grid Grid.Row="2"
+              Visibility="{Binding IsDashboardVisible, Converter={StaticResource BoolToVisibility}, ConverterParameter=Invert}">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="280" MinWidth="200" />
                 <ColumnDefinition Width="Auto" />
@@ -386,6 +396,155 @@
                     </TabItem>
                 </TabControl>
             </Grid>
+        </Grid>
+
+        <!-- Body: dashboard -->
+        <Grid Grid.Row="2" Background="{StaticResource Bg.Window}"
+              Visibility="{Binding IsDashboardVisible, Converter={StaticResource BoolToVisibility}}">
+            <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="16,14,16,16">
+                <StackPanel>
+
+                    <!-- Totals across every server -->
+                    <UniformGrid Columns="5">
+                        <Border Background="{StaticResource Bg.Panel}" CornerRadius="6"
+                                Padding="14,12" Margin="0,0,10,0">
+                            <StackPanel>
+                                <TextBlock Text="Servers" Style="{StaticResource Label}" Margin="0,0,0,2" />
+                                <TextBlock FontSize="20" Text="{Binding RunningSummary}" />
+                            </StackPanel>
+                        </Border>
+                        <Border Background="{StaticResource Bg.Panel}" CornerRadius="6"
+                                Padding="14,12" Margin="0,0,10,0">
+                            <StackPanel>
+                                <TextBlock Text="Total CPU" Style="{StaticResource Label}" Margin="0,0,0,2" />
+                                <TextBlock FontSize="20"
+                                           Text="{Binding TotalCpuPercent, StringFormat={}{0:0.0}%}" />
+                            </StackPanel>
+                        </Border>
+                        <Border Background="{StaticResource Bg.Panel}" CornerRadius="6"
+                                Padding="14,12" Margin="0,0,10,0">
+                            <StackPanel>
+                                <TextBlock Text="Total memory" Style="{StaticResource Label}" Margin="0,0,0,2" />
+                                <TextBlock FontSize="20"
+                                           Text="{Binding TotalMemoryMegabytes, StringFormat={}{0:0} MB}" />
+                            </StackPanel>
+                        </Border>
+                        <Border Background="{StaticResource Bg.Panel}" CornerRadius="6"
+                                Padding="14,12" Margin="0,0,10,0">
+                            <StackPanel>
+                                <TextBlock Text="Processes" Style="{StaticResource Label}" Margin="0,0,0,2" />
+                                <TextBlock FontSize="20" Text="{Binding TotalProcessCount}" />
+                            </StackPanel>
+                        </Border>
+                        <Border Background="{StaticResource Bg.Panel}" CornerRadius="6" Padding="14,12">
+                            <StackPanel>
+                                <TextBlock Text="ServerManager" Style="{StaticResource Label}" Margin="0,0,0,2" />
+                                <TextBlock FontSize="20"
+                                           Text="{Binding AppMemoryMegabytes, StringFormat={}{0:0} MB}" />
+                                <TextBlock Style="{StaticResource Hint}" Margin="0,2,0,0"
+                                           Text="{Binding AppCpuPercent, StringFormat={}{0:0.0}% CPU}" />
+                            </StackPanel>
+                        </Border>
+                    </UniformGrid>
+
+                    <!-- Only shown when something actually needs looking at -->
+                    <Border Background="{StaticResource Danger}" CornerRadius="6" Padding="14,10"
+                            Margin="0,10,0,0"
+                            Visibility="{Binding HasProblems, Converter={StaticResource BoolToVisibility}}">
+                        <TextBlock Text="{Binding ProblemSummary}" FontWeight="SemiBold" />
+                    </Border>
+
+                    <!-- Empty state -->
+                    <StackPanel Margin="0,60,0,0" HorizontalAlignment="Center"
+                                Visibility="{Binding HasServers, Converter={StaticResource BoolToVisibility}, ConverterParameter=Invert}">
+                        <TextBlock Text="No servers yet" HorizontalAlignment="Center" FontSize="15" />
+                        <TextBlock Text="Add a .bat or .ps1 that starts your server."
+                                   Style="{StaticResource Hint}" TextAlignment="Center" Margin="0,6,0,12" />
+                        <Button Content="Add server" Style="{StaticResource PrimaryButton}"
+                                Command="{Binding AddServerCommand}" HorizontalAlignment="Center" Margin="0" />
+                    </StackPanel>
+
+                    <!-- One card per server -->
+                    <ItemsControl ItemsSource="{Binding Servers}" Margin="0,12,0,0">
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <WrapPanel Orientation="Horizontal" />
+                            </ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Border Width="340" Margin="0,0,12,12" CornerRadius="6"
+                                        Background="{StaticResource Bg.Panel}"
+                                        BorderBrush="{StaticResource Border.Subtle}" BorderThickness="1"
+                                        Padding="14,12">
+                                    <StackPanel>
+                                        <DockPanel>
+                                            <Ellipse DockPanel.Dock="Left" Width="10" Height="10"
+                                                     Margin="0,0,9,0" VerticalAlignment="Center"
+                                                     Fill="{Binding State, Converter={StaticResource StateToBrush}}" />
+                                            <TextBlock DockPanel.Dock="Right" Text="{Binding StatusText}"
+                                                       FontSize="11.5" VerticalAlignment="Center"
+                                                       Foreground="{StaticResource Fg.Secondary}" />
+                                            <TextBlock Text="{Binding Name}" FontWeight="SemiBold" FontSize="13"
+                                                       TextTrimming="CharacterEllipsis" Margin="0,0,10,0" />
+                                        </DockPanel>
+
+                                        <UniformGrid Columns="4" Margin="0,12,0,0">
+                                            <StackPanel>
+                                                <TextBlock Text="CPU" Style="{StaticResource Label}" Margin="0,0,0,1" />
+                                                <TextBlock FontSize="14"
+                                                           Text="{Binding CpuPercent, StringFormat={}{0:0.0}%}" />
+                                            </StackPanel>
+                                            <StackPanel>
+                                                <TextBlock Text="Memory" Style="{StaticResource Label}" Margin="0,0,0,1" />
+                                                <TextBlock FontSize="14"
+                                                           Text="{Binding MemoryMegabytes, StringFormat={}{0:0} MB}" />
+                                            </StackPanel>
+                                            <StackPanel>
+                                                <TextBlock Text="Uptime" Style="{StaticResource Label}" Margin="0,0,0,1" />
+                                                <TextBlock FontSize="14" Text="{Binding UptimeText}" />
+                                            </StackPanel>
+                                            <StackPanel>
+                                                <TextBlock Text="Procs" Style="{StaticResource Label}" Margin="0,0,0,1" />
+                                                <TextBlock FontSize="14" Text="{Binding ProcessCount}" />
+                                            </StackPanel>
+                                        </UniformGrid>
+
+                                        <Border Background="{StaticResource Bg.Console}" CornerRadius="3"
+                                                Height="46" Padding="6" Margin="0,10,0,0">
+                                            <views:Sparkline Values="{Binding CpuHistory}" Maximum="100"
+                                                             Stroke="{StaticResource Accent.Hover}" />
+                                        </Border>
+
+                                        <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                                            <Button Content="Start" Style="{StaticResource PrimaryButton}"
+                                                    Padding="12,4" FontSize="11.5"
+                                                    IsEnabled="{Binding CanStart}"
+                                                    Command="{Binding DataContext.StartCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                    CommandParameter="{Binding}" />
+                                            <Button Content="Stop" Style="{StaticResource ToolButton}"
+                                                    Padding="12,4" FontSize="11.5"
+                                                    IsEnabled="{Binding CanStop}"
+                                                    Command="{Binding DataContext.StopCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                    CommandParameter="{Binding}" />
+                                            <Button Content="Restart" Style="{StaticResource ToolButton}"
+                                                    Padding="12,4" FontSize="11.5"
+                                                    IsEnabled="{Binding CanStop}"
+                                                    Command="{Binding DataContext.RestartCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                    CommandParameter="{Binding}" />
+                                            <Button Content="Open" Style="{StaticResource ToolButton}"
+                                                    Padding="12,4" FontSize="11.5" Margin="0"
+                                                    ToolTip="Show this server console and settings"
+                                                    Command="{Binding DataContext.OpenServerCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                    CommandParameter="{Binding}" />
+                                        </StackPanel>
+                                    </StackPanel>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </StackPanel>
+            </ScrollViewer>
         </Grid>
 
         <!-- Status bar -->
