@@ -18,10 +18,19 @@ on:
         required: false
         type: string
   workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version name to stamp into the APK (e.g. 1.4.1)'
+        required: false
+      attachToRelease:
+        description: 'Attach the APK to the release with this tag (e.g. v1.4.1). Leave empty to just build it.'
+        required: false
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
 
     steps:
       - uses: actions/checkout@v7
@@ -37,7 +46,7 @@ jobs:
         id: version
         shell: bash
         run: |
-          VERSION="${{ inputs.version }}"
+          VERSION="${{ inputs.version || github.event.inputs.version }}"
           if [ -z "$VERSION" ]; then VERSION="0.0.0"; fi
           # versionCode must increase monotonically; derive it from the version numbers.
           IFS='.' read -r MAJOR MINOR PATCH <<< "$VERSION"
@@ -105,3 +114,13 @@ jobs:
           name: android-apk
           path: artifacts/*.apk
           if-no-files-found: error
+
+      # Only when asked: the APK is usually built to check it still compiles, not to ship.
+      - name: Attach to a release
+        if: ${{ github.event.inputs.attachToRelease != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          APK="artifacts/ServerManager-${{ steps.version.outputs.name }}.apk"
+          gh release upload "${{ github.event.inputs.attachToRelease }}" "$APK" --clobber

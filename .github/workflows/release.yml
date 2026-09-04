@@ -41,16 +41,12 @@ jobs:
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "Publishing $TAG (version $VERSION)"
 
-  # Built in its own job so a broken phone app cannot silently ship a desktop release
-  # without an APK, and vice versa.
-  android:
-    needs: version
-    uses: ./.github/workflows/android.yml
-    with:
-      version: ${{ needs.version.outputs.version }}
-
+  # The Android app is released separately. Most releases only change the desktop side,
+  # and rebuilding the APK for each one added several minutes and a flaky Android SDK
+  # download to every release for an artifact that had not changed. Run the Android
+  # workflow by hand when the app itself needs shipping.
   release:
-    needs: [version, android]
+    needs: version
     runs-on: windows-latest
     permissions:
       # Required to create the release and upload its assets.
@@ -90,12 +86,6 @@ jobs:
           $hash | Out-File -FilePath publish/ServerLauncher.exe.sha256 -Encoding ascii -NoNewline
           Write-Host "SHA256: $hash"
 
-      - name: Collect the Android APK
-        uses: actions/download-artifact@v5
-        with:
-          name: android-apk
-          path: publish
-
       - name: Publish release
         uses: softprops/action-gh-release@v3
         with:
@@ -105,4 +95,3 @@ jobs:
           files: |
             publish/ServerLauncher.exe
             publish/ServerLauncher.exe.sha256
-            publish/*.apk
