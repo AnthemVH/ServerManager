@@ -140,16 +140,16 @@ class ApiClient(private val tokens: TokenStore) {
 
     // --- plumbing ---
 
-    private suspend fun <T> get(path: String, parse: (String) -> T): ApiResult<T> =
-        call(Request.Builder().url(url(path) ?: return ApiResult.Failed("Not paired.")).get(), parse)
+    // Block bodies: an early return is not allowed from an expression-bodied function.
+    private suspend fun <T> get(path: String, parse: (String) -> T): ApiResult<T> {
+        val full = url(path) ?: return ApiResult.Failed("Not paired.", unauthorised = true)
+        return call(Request.Builder().url(full).get(), parse)
+    }
 
-    private suspend fun <T> post(path: String, body: String?, parse: (String) -> T): ApiResult<T> =
-        call(
-            Request.Builder()
-                .url(url(path) ?: return ApiResult.Failed("Not paired."))
-                .post((body ?: "").toRequestBody(json)),
-            parse,
-        )
+    private suspend fun <T> post(path: String, body: String?, parse: (String) -> T): ApiResult<T> {
+        val full = url(path) ?: return ApiResult.Failed("Not paired.", unauthorised = true)
+        return call(Request.Builder().url(full).post((body ?: "").toRequestBody(json)), parse)
+    }
 
     private fun url(path: String): String? = tokens.baseUrl()?.let { "$it$path" }
 

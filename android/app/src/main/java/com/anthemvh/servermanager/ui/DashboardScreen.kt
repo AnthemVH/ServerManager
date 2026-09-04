@@ -1,5 +1,6 @@
 package com.anthemvh.servermanager.ui
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -218,7 +219,3 @@ private fun Metric(label: String, value: String) {
         Text(value, style = MaterialTheme.typography.bodyMedium)
     }
 }
-
-private fun Modifier.background(colour: Color) = this.then(
-    androidx.compose.foundation.background(colour)
-)
