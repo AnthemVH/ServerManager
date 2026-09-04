@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Windows;
 using ServerLauncher.App.Remote;
 using ServerLauncher.App.TrayIcon;
@@ -81,7 +82,8 @@ public partial class App : Application
             _viewModel,
             onOpen: ShowMainWindow,
             onExit: RequestExit,
-            onToggle: ToggleMainWindow);
+            onToggle: ToggleMainWindow,
+            onOpenBrowser: OpenBrowserInterface);
 
         StartShowWindowWatcher();
 
@@ -132,6 +134,37 @@ public partial class App : Application
             MessageBox.Show(
                 $"Remote access could not be started.\n\n{error}",
                 "Remote access",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+        }
+    }
+
+    /// <summary>
+    /// Opens the browser interface on this machine. The API listens on loopback, so this
+    /// is the address that works here; a phone reaches it through Tailscale Serve.
+    /// </summary>
+    public void OpenBrowserInterface()
+    {
+        if (_remote is null || !_remote.IsRunning || _remote.ListeningOn is not { } url)
+        {
+            MessageBox.Show(
+                "Remote access is off, so there is nothing to open. Turn it on in Settings, "
+                + "then try again.",
+                "Browser interface",
+                MessageBoxButton.OK,
+                MessageBoxImage.Information);
+            return;
+        }
+
+        try
+        {
+            Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(
+                $"Could not open a browser.\n\n{ex.Message}\n\nOpen {url} yourself instead.",
+                "Browser interface",
                 MessageBoxButton.OK,
                 MessageBoxImage.Warning);
         }

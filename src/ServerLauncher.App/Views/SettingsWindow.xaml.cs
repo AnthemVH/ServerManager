@@ -176,6 +176,8 @@ public partial class SettingsWindow : Window
         RefreshDevices();
     }
 
+    private void OnOpenBrowser(object sender, RoutedEventArgs e) => App.Current.OpenBrowserInterface();
+
     private void OnCopyServeCommand(object sender, RoutedEventArgs e)
     {
         var port = ParseInt(RemotePortBox.Text, 8787, min: 1);

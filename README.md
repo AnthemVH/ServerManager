@@ -161,12 +161,17 @@ token into remote code execution rather than just an unwanted restart.
 
 ### From a browser, with nothing to install
 
-ServerManager serves a phone-sized web interface on the same address as the API, so once
-remote access is on you can just open it:
+ServerManager serves a phone-sized web interface on the same address as the API. Once
+remote access is on, **Settings &rarr; Remote access &rarr; Open in browser** opens it on
+the server itself, and the tray menu has **Open browser interface** for when the window is
+hidden. Both go to:
 
 ```
-http://<your tailnet address>:8787/
+http://127.0.0.1:8787/
 ```
+
+To reach it from a phone, publish that port with Tailscale Serve (below) and use the
+address Tailscale prints.
 
 Pair it with the same code the desktop shows, and it works exactly like the app: the
 dashboard, start/stop/restart, consoles and commands. The browser appears in the paired

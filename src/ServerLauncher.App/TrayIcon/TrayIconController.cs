@@ -25,18 +25,25 @@ public sealed class TrayIconController : IDisposable
     private readonly Action _onOpen;
     private readonly Action _onExit;
     private readonly Action _onToggle;
+    private readonly Action _onOpenBrowser;
     private readonly List<(ServerViewModel Server, PropertyChangedEventHandler Handler)> _subscriptions = new();
 
     private TaskbarIcon? _icon;
     private MenuItem? _serversMenu;
     private bool _disposed;
 
-    public TrayIconController(MainViewModel viewModel, Action onOpen, Action onExit, Action onToggle)
+    public TrayIconController(
+        MainViewModel viewModel,
+        Action onOpen,
+        Action onExit,
+        Action onToggle,
+        Action? onOpenBrowser = null)
     {
         _viewModel = viewModel;
         _onOpen = onOpen;
         _onExit = onExit;
         _onToggle = onToggle;
+        _onOpenBrowser = onOpenBrowser ?? (() => { });
 
         Create();
 
@@ -92,12 +99,17 @@ public sealed class TrayIconController : IDisposable
         var open = new MenuItem { Header = "Open ServerManager", FontWeight = FontWeights.SemiBold };
         open.Click += (_, _) => _onOpen();
 
+        // Reachable without opening the window, which on a server is usually hidden.
+        var browser = new MenuItem { Header = "Open browser interface" };
+        browser.Click += (_, _) => _onOpenBrowser();
+
         _serversMenu = new MenuItem { Header = "Servers" };
 
         var exit = new MenuItem { Header = "Exit" };
         exit.Click += (_, _) => _onExit();
 
         menu.Items.Add(open);
+        menu.Items.Add(browser);
         menu.Items.Add(new Separator());
         menu.Items.Add(_serversMenu);
         menu.Items.Add(new Separator());

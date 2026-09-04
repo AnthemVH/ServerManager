@@ -76,9 +76,14 @@
                 <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
                     <Button Content="Pair a phone" Style="{StaticResource PrimaryButton}"
                             Click="OnPairDevice" />
+                    <Button Content="Open in browser" Style="{StaticResource ToolButton}"
+                            Click="OnOpenBrowser"
+                            ToolTip="Opens the same interface your phone uses, on this machine" />
                     <Button Content="Copy serve command" Style="{StaticResource ToolButton}"
                             Click="OnCopyServeCommand" Margin="0" />
                 </StackPanel>
+                <TextBlock Style="{StaticResource Hint}"
+                           Text="The browser interface runs on this machine at the address shown above. To reach it from a phone, publish that port with Tailscale Serve and use the address Tailscale prints." />
 
                 <TextBlock Text="Paired devices" Style="{StaticResource Label}" Margin="0,16,0,4" />
                 <Border Background="{StaticResource Bg.Panel}" CornerRadius="4" Padding="4"
