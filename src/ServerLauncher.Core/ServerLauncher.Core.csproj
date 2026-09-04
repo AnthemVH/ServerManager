@@ -6,4 +6,10 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
 
+  <ItemGroup>
+    <!-- Embedded rather than copied beside the exe: the app ships as a single file, and
+         an asset read from disk would be one more thing that can go missing. -->
+    <EmbeddedResource Include="Remote\WebUI\index.html" />
+  </ItemGroup>
+
 </Project>

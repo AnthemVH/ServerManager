@@ -115,6 +115,59 @@ public sealed class RemoteApiTests : IAsyncLifetime
         return client;
     }
 
+    // --- Browser interface ---
+
+    [Fact]
+    public async Task TheBrowserInterfaceIsServedWithoutAToken()
+    {
+        // It has to be reachable before a token exists, since pairing happens on it.
+        var response = await _client.GetAsync("/");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        response.Content.Headers.ContentType!.MediaType.Should().Be("text/html");
+
+        var html = await response.Content.ReadAsStringAsync();
+        html.Should().Contain("ServerManager");
+        html.Should().Contain("Pairing code", "the page must offer the pairing form");
+    }
+
+    [Fact]
+    public async Task TheBrowserInterfaceServesTheSamePageForIndexHtml()
+    {
+        (await _client.GetAsync("/index.html")).StatusCode.Should().Be(HttpStatusCode.OK);
+    }
+
+    [Fact]
+    public async Task ServingThePageDoesNotExposeTheFilesystem()
+    {
+        // Only one embedded page is ever served, so no request path is turned into a file
+        // path. These would be traversal attempts if it were.
+        var attempts = new[]
+        {
+            "/../../../../Windows/System32/drivers/etc/hosts",
+            "/..%2f..%2fwindows%2fwin.ini",
+            "/servers.json",
+            "/devices.json",
+            "/appsettings.json",
+        };
+
+        foreach (var attempt in attempts)
+        {
+            var response = await _client.GetAsync(attempt);
+
+            response.StatusCode.Should().NotBe(HttpStatusCode.OK,
+                $"{attempt} must not resolve to anything on disk");
+        }
+    }
+
+    [Fact]
+    public async Task TheApiStillRequiresATokenEvenThoughThePageIsPublic()
+    {
+        // Serving the page anonymously must not have opened up the data behind it.
+        (await _client.GetAsync("/")).StatusCode.Should().Be(HttpStatusCode.OK);
+        (await _client.GetAsync("/api/v1/servers")).StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+    }
+
     // --- The boundary the whole design rests on ---
 
     [Fact]

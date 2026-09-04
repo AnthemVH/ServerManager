@@ -242,8 +242,17 @@ public sealed class RemoteApiServer : IDisposable
         var method = context.Request.HttpMethod;
         var segments = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
 
+        // Anything that is not the API is the browser interface. Only the one embedded
+        // page is ever served — nothing maps a request path onto the filesystem, so there
+        // is no traversal to get wrong.
+        if (segments.Length == 0 || segments[0] != "api")
+        {
+            await ServeWebInterfaceAsync(context, path, method).ConfigureAwait(false);
+            return;
+        }
+
         // /api/v1/...
-        if (segments.Length < 3 || segments[0] != "api" || segments[1] != "v1")
+        if (segments.Length < 3 || segments[1] != "v1")
         {
             await WriteAsync(context, HttpStatusCode.NotFound, new ApiError("No such endpoint."))
                 .ConfigureAwait(false);
@@ -307,6 +316,72 @@ public sealed class RemoteApiServer : IDisposable
                     .ConfigureAwait(false);
                 return;
         }
+    }
+
+    // --- Browser interface ---
+
+    private static readonly Lazy<byte[]> WebPage = new(() =>
+    {
+        var assembly = typeof(RemoteApiServer).Assembly;
+        var name = assembly.GetManifestResourceNames()
+            .FirstOrDefault(n => n.EndsWith("WebUI.index.html", StringComparison.Ordinal));
+
+        if (name is null)
+        {
+            return Encoding.UTF8.GetBytes(
+                "<!doctype html><title>ServerManager</title>"
+                + "<p>The browser interface is missing from this build.");
+        }
+
+        using var stream = assembly.GetManifestResourceStream(name)!;
+        using var memory = new MemoryStream();
+        stream.CopyTo(memory);
+        return memory.ToArray();
+    });
+
+    /// <summary>
+    /// Serves the single-page browser interface.
+    /// </summary>
+    /// <remarks>
+    /// The page itself needs no authentication — it holds no data, and pairing has to be
+    /// reachable before a token exists. Everything it displays comes from the API, which
+    /// still demands a device token for every request.
+    /// </remarks>
+    private static async Task ServeWebInterfaceAsync(
+        HttpListenerContext context, string path, string method)
+    {
+        if (method != "GET" && method != "HEAD")
+        {
+            await WriteAsync(context, HttpStatusCode.MethodNotAllowed,
+                new ApiError("Only GET is served here.")).ConfigureAwait(false);
+            return;
+        }
+
+        // The interface is one page; treat "/" and "/index.html" as it, and anything else
+        // as missing rather than trying to resolve it.
+        var normalised = path.Trim('/');
+        if (normalised.Length != 0
+            && !normalised.Equals("index.html", StringComparison.OrdinalIgnoreCase))
+        {
+            context.Response.StatusCode = (int)HttpStatusCode.NotFound;
+            return;
+        }
+
+        var payload = WebPage.Value;
+
+        context.Response.StatusCode = (int)HttpStatusCode.OK;
+        context.Response.ContentType = "text/html; charset=utf-8";
+        context.Response.ContentLength64 = payload.Length;
+
+        // The page is rebuilt with each release, so it must not be cached across updates.
+        context.Response.Headers["Cache-Control"] = "no-store";
+
+        if (method == "HEAD")
+        {
+            return;
+        }
+
+        await context.Response.OutputStream.WriteAsync(payload).ConfigureAwait(false);
     }
 
     private PairedDevice? Authenticate(HttpListenerContext context)

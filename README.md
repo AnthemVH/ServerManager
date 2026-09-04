@@ -159,6 +159,24 @@ configured**, and deliberately has no way to create one or change a script path 
 launches arbitrary scripts, so an endpoint that could set one would turn a stolen phone
 token into remote code execution rather than just an unwanted restart.
 
+### From a browser, with nothing to install
+
+ServerManager serves a phone-sized web interface on the same address as the API, so once
+remote access is on you can just open it:
+
+```
+http://<your tailnet address>:8787/
+```
+
+Pair it with the same code the desktop shows, and it works exactly like the app: the
+dashboard, start/stop/restart, consoles and commands. The browser appears in the paired
+device list and is revoked the same way. On Android or iOS, *Add to home screen* gives it
+an icon and its own window.
+
+Nothing about it weakens the API. The page itself is served without a token — it has to
+be, since pairing happens on it — but it holds no data, and every request behind it still
+needs a device token.
+
 ### Setting it up
 
 1. Install [Tailscale](https://tailscale.com/) on the server and your phone, signed into
