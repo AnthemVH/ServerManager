@@ -1,5 +1,10 @@
+using System.Collections.ObjectModel;
+using System.ComponentModel;
 using System.Windows;
+using System.Windows.Controls;
+using ServerLauncher.App.Remote;
 using ServerLauncher.Core.Models;
+using ServerLauncher.Core.Remote;
 using ServerLauncher.Core.Updates;
 
 namespace ServerLauncher.App.Views;
@@ -7,9 +12,14 @@ namespace ServerLauncher.App.Views;
 /// <summary>Editor for application-wide preferences.</summary>
 public partial class SettingsWindow : Window
 {
-    public SettingsWindow(AppSettings settings)
+    private readonly RemoteAccessService? _remote;
+    private readonly ObservableCollection<DeviceRow> _devices = new();
+
+    public SettingsWindow(AppSettings settings, RemoteAccessService? remote = null)
     {
         InitializeComponent();
+
+        _remote = remote;
 
         // Edited on a copy so cancelling changes nothing.
         Settings = new AppSettings
@@ -22,7 +32,15 @@ public partial class SettingsWindow : Window
             PowerShellPath = settings.PowerShellPath,
             UpdateRepository = settings.UpdateRepository,
             CheckForUpdatesOnStartup = settings.CheckForUpdatesOnStartup,
-            StartWithWindows = settings.StartWithWindows
+            StartWithWindows = settings.StartWithWindows,
+            RemoteAccess = new RemoteAccessSettings
+            {
+                Enabled = settings.RemoteAccess.Enabled,
+                BindAddress = settings.RemoteAccess.BindAddress,
+                Port = settings.RemoteAccess.Port,
+                PhoneAddress = settings.RemoteAccess.PhoneAddress,
+                AllowNonTailscaleBinding = settings.RemoteAccess.AllowNonTailscaleBinding
+            }
         };
 
         ConsoleLinesBox.Text = Settings.ConsoleBufferLines.ToString();
@@ -37,9 +55,166 @@ public partial class SettingsWindow : Window
         // Read the real registry state rather than trusting the saved flag, which can
         // drift if the entry was removed outside the app.
         StartWithWindowsBox.IsChecked = StartupRegistration.IsEnabled();
+
+        RemoteEnabledBox.IsChecked = Settings.RemoteAccess.Enabled;
+        RemotePortBox.Text = Settings.RemoteAccess.Port.ToString();
+        RemotePhoneAddressBox.Text = Settings.RemoteAccess.PhoneAddress;
+        TailscaleStatusText.Text = TailscaleDetector.DescribeDetection();
+
+        DeviceList.ItemsSource = _devices;
+        RefreshRemoteStatus();
+        RefreshDevices();
     }
 
     public AppSettings Settings { get; }
+
+    /// <summary>A paired device as shown in the list, with its command permission bound.</summary>
+    public sealed class DeviceRow : INotifyPropertyChanged
+    {
+        private readonly DeviceStore _store;
+        private bool _canSendCommands;
+
+        public DeviceRow(DeviceStore store, PairedDevice device)
+        {
+            _store = store;
+            Id = device.Id;
+            Name = device.Name;
+            _canSendCommands = device.Can(DeviceCapabilities.SendCommands);
+
+            var seen = device.LastSeen is null
+                ? "never seen"
+                : $"last seen {device.LastSeen:yyyy-MM-dd HH:mm}";
+
+            Detail = $"Paired {device.PairedAt:yyyy-MM-dd HH:mm} · {seen}";
+        }
+
+        public string Id { get; }
+
+        public string Name { get; }
+
+        public string Detail { get; }
+
+        public bool CanSendCommands
+        {
+            get => _canSendCommands;
+            set
+            {
+                if (_canSendCommands == value)
+                {
+                    return;
+                }
+
+                _canSendCommands = value;
+
+                // Applied at once: a permission just switched off should not wait for the
+                // user to also press Save.
+                var capabilities = DeviceCapabilities.Default;
+                if (value)
+                {
+                    capabilities |= DeviceCapabilities.SendCommands;
+                }
+
+                _store.SetCapabilities(Id, capabilities);
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CanSendCommands)));
+            }
+        }
+
+        public event PropertyChangedEventHandler? PropertyChanged;
+    }
+
+    private void RefreshDevices()
+    {
+        _devices.Clear();
+
+        if (_remote is not null)
+        {
+            foreach (var device in _remote.Devices.Devices)
+            {
+                _devices.Add(new DeviceRow(_remote.Devices, device));
+            }
+        }
+
+        NoDevicesText.Visibility = _devices.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private void RefreshRemoteStatus()
+    {
+        if (_remote is null)
+        {
+            RemoteStatusText.Text = string.Empty;
+            return;
+        }
+
+        RemoteStatusText.Text = _remote.LastError is { } error
+            ? $"Not running: {error}"
+            : _remote.IsRunning
+                ? $"Running, listening on {_remote.ListeningOn}"
+                : "Not running.";
+    }
+
+    private void OnPairDevice(object sender, RoutedEventArgs e)
+    {
+        if (_remote is null)
+        {
+            return;
+        }
+
+        // Pairing needs the API up, otherwise the phone has nothing to talk to.
+        if (!_remote.IsRunning)
+        {
+            MessageBox.Show(
+                "Turn on remote access and press Save first, then pair a phone.",
+                "Remote access is off",
+                MessageBoxButton.OK,
+                MessageBoxImage.Information);
+            return;
+        }
+
+        var dialog = new PairingWindow(_remote.Pairing, Settings) { Owner = this };
+        dialog.ShowDialog();
+
+        RefreshDevices();
+    }
+
+    private void OnCopyServeCommand(object sender, RoutedEventArgs e)
+    {
+        var port = ParseInt(RemotePortBox.Text, 8787, min: 1);
+
+        try
+        {
+            Clipboard.SetText($"tailscale serve --bg {port}");
+            RemoteStatusText.Text = "Serve command copied. Run it on this machine once.";
+        }
+        catch (Exception)
+        {
+            // Another app can hold the clipboard; not worth interrupting the user.
+        }
+    }
+
+    private void OnRevokeDevice(object sender, RoutedEventArgs e)
+    {
+        if (_remote is null || sender is not Button { Tag: string deviceId })
+        {
+            return;
+        }
+
+        var row = _devices.FirstOrDefault(d => d.Id == deviceId);
+
+        var confirm = MessageBox.Show(
+            $"Revoke access for '{row?.Name ?? "this device"}'?\n\n"
+            + "It stops working immediately and would have to be paired again.",
+            "Revoke device",
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Question);
+
+        if (confirm != MessageBoxResult.Yes)
+        {
+            return;
+        }
+
+        _remote.Devices.Revoke(deviceId);
+        RefreshDevices();
+    }
 
     private void OnSave(object sender, RoutedEventArgs e)
     {
@@ -54,6 +229,10 @@ public partial class SettingsWindow : Window
 
         Settings.UpdateRepository = NormaliseRepository(UpdateRepositoryBox.Text);
         Settings.CheckForUpdatesOnStartup = CheckUpdatesBox.IsChecked == true;
+
+        Settings.RemoteAccess.Enabled = RemoteEnabledBox.IsChecked == true;
+        Settings.RemoteAccess.Port = ParseInt(RemotePortBox.Text, 8787, min: 1);
+        Settings.RemoteAccess.PhoneAddress = RemotePhoneAddressBox.Text.Trim();
 
         Settings.StartWithWindows = StartWithWindowsBox.IsChecked == true;
         if (!StartupRegistration.SetEnabled(Settings.StartWithWindows, Settings.StartMinimised))

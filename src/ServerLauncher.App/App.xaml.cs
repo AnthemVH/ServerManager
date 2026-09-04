@@ -1,4 +1,5 @@
 using System.Windows;
+using ServerLauncher.App.Remote;
 using ServerLauncher.App.TrayIcon;
 using ServerLauncher.App.ViewModels;
 using ServerLauncher.Core.Models;
@@ -21,11 +22,15 @@ public partial class App : Application
     private MainViewModel? _viewModel;
     private MainWindow? _window;
     private TrayIconController? _tray;
+    private RemoteAccessService? _remote;
     private bool _exiting;
 
     public new static App Current => (App)Application.Current;
 
     public AppSettings Settings => _manager?.Settings ?? new AppSettings();
+
+    /// <summary>The remote control API, or null before startup has run.</summary>
+    public RemoteAccessService? Remote => _remote;
 
     protected override async void OnStartup(StartupEventArgs e)
     {
@@ -98,11 +103,37 @@ public partial class App : Application
         await _manager.InitialiseAsync();
         _viewModel.SyncServers();
 
+        _remote = new RemoteAccessService(_manager);
+        await ApplyRemoteAccessAsync();
+
         if (_manager.Settings.CheckForUpdatesOnStartup)
         {
             // Deliberately not awaited into startup: a slow or unreachable GitHub must
             // never delay the servers coming up.
             _ = _viewModel.CheckForUpdatesAsync(announceResult: false);
+        }
+    }
+
+    /// <summary>
+    /// Starts or stops the remote API to match the settings, surfacing any failure rather
+    /// than leaving the user believing remote access is on when it is not.
+    /// </summary>
+    public async Task ApplyRemoteAccessAsync(bool reportFailure = false)
+    {
+        if (_remote is null || _manager is null)
+        {
+            return;
+        }
+
+        var ok = await _remote.ApplyAsync(_manager.Settings).ConfigureAwait(true);
+
+        if (!ok && reportFailure && _remote.LastError is { } error)
+        {
+            MessageBox.Show(
+                $"Remote access could not be started.\n\n{error}",
+                "Remote access",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
         }
     }
 
@@ -276,6 +307,7 @@ public partial class App : Application
     {
         _watcherShutdown?.Set();
 
+        _remote?.Dispose();
         _tray?.Dispose();
         _viewModel?.Dispose();
         _manager?.Dispose();

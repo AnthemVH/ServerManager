@@ -1,7 +1,7 @@
 name: Release
 
 # Tag a commit with v1.2.0 and push the tag; this builds, tests, and publishes the
-# release the launcher will offer to install on the server.
+# release the launcher will offer to install on the server, plus the Android APK.
 on:
   push:
     tags:
@@ -13,7 +13,44 @@ on:
         required: true
 
 jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+      tag: ${{ steps.resolve.outputs.tag }}
+
+    steps:
+      - name: Resolve version
+        id: resolve
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+            TAG="v$VERSION"
+          else
+            TAG="${{ github.ref_name }}"
+            VERSION="${TAG#v}"
+          fi
+
+          if ! echo "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "Version '$VERSION' must look like 1.2.0 — the launcher parses it to compare releases." >&2
+            exit 1
+          fi
+
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Publishing $TAG (version $VERSION)"
+
+  # Built in its own job so a broken phone app cannot silently ship a desktop release
+  # without an APK, and vice versa.
+  android:
+    needs: version
+    uses: ./.github/workflows/android.yml
+    with:
+      version: ${{ needs.version.outputs.version }}
+
   release:
+    needs: [version, android]
     runs-on: windows-latest
     permissions:
       # Required to create the release and upload its assets.
@@ -25,26 +62,6 @@ jobs:
       - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: '8.0.x'
-
-      - name: Resolve version
-        id: version
-        shell: pwsh
-        run: |
-          if ('${{ github.event_name }}' -eq 'workflow_dispatch') {
-            $version = '${{ github.event.inputs.version }}'
-            $tag = "v$version"
-          } else {
-            $tag = '${{ github.ref_name }}'
-            $version = $tag -replace '^v', ''
-          }
-
-          if ($version -notmatch '^\d+\.\d+\.\d+$') {
-            throw "Version '$version' must look like 1.2.0 — the launcher parses it to compare releases."
-          }
-
-          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-          "tag=$tag"         | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-          Write-Host "Publishing $tag (version $version)"
 
       - name: Restore
         run: dotnet restore
@@ -62,7 +79,7 @@ jobs:
             --runtime win-x64 `
             --self-contained false `
             -p:PublishSingleFile=true `
-            -p:Version=${{ steps.version.outputs.version }} `
+            -p:Version=${{ needs.version.outputs.version }} `
             --output publish
 
       - name: Compute checksum
@@ -73,12 +90,19 @@ jobs:
           $hash | Out-File -FilePath publish/ServerLauncher.exe.sha256 -Encoding ascii -NoNewline
           Write-Host "SHA256: $hash"
 
+      - name: Collect the Android APK
+        uses: actions/download-artifact@v4
+        with:
+          name: android-apk
+          path: publish
+
       - name: Publish release
         uses: softprops/action-gh-release@v3
         with:
-          tag_name: ${{ steps.version.outputs.tag }}
-          name: ${{ steps.version.outputs.tag }}
+          tag_name: ${{ needs.version.outputs.tag }}
+          name: ${{ needs.version.outputs.tag }}
           generate_release_notes: true
           files: |
             publish/ServerLauncher.exe
             publish/ServerLauncher.exe.sha256
+            publish/*.apk

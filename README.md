@@ -50,6 +50,9 @@ copy's window back rather than reporting that it is already running.
 
 **Self-updating** — checks GitHub for new releases and installs them on your approval.
 
+**Phone control** — an Android app to view your servers, start and stop them, read their
+consoles and send commands, from anywhere over Tailscale. Off unless you turn it on.
+
 ---
 
 ## Installing
@@ -148,6 +151,61 @@ the update starts successfully. If a build misbehaves, delete the new exe and re
 file back.
 
 ---
+
+## Controlling it from your phone
+
+Off by default. The API can start, stop, restart and inspect **servers you have already
+configured**, and deliberately has no way to create one or change a script path — this app
+launches arbitrary scripts, so an endpoint that could set one would turn a stolen phone
+token into remote code execution rather than just an unwanted restart.
+
+### Setting it up
+
+1. Install [Tailscale](https://tailscale.com/) on the server and your phone, signed into
+   the same tailnet.
+2. In **Settings → Remote access**, tick *Allow remote control* and press Save.
+3. Run this once on the server, to publish the local port onto your tailnet:
+
+   ```
+   tailscale serve --bg 8787
+   ```
+
+   The Settings screen has a button that copies this command.
+4. Put the address Tailscale gives you into **Address phones should connect to**.
+5. Install the APK from the [latest release](https://github.com/AnthemVH/ServerManager/releases/latest)
+   on your phone, press **Pair a phone** on the desktop, and scan the QR code.
+
+The API listens on `127.0.0.1` only. Tailscale Serve is what makes it reachable, and it
+terminates TLS with a real Tailscale-issued certificate, so nothing is ever exposed to the
+open internet and no port is forwarded.
+
+### How access is controlled
+
+Security comes from a secret each install generates for itself, never from anything in this
+repository — your install and anyone else's have completely independent credentials.
+
+- Pairing needs a **single-use code** that expires in five minutes, is rate limited, and
+  exists only while the pairing dialog is open.
+- Device tokens are 256 bits and stored **only as hashes**; the plaintext never touches disk.
+- Every device is listed in Settings and **revocable individually**, taking effect at once.
+- **Sending console commands is a separate permission**, off by default, granted per device.
+  It is arbitrary input to a game server, so it is not handed out at pairing.
+- Every remote action is written to an audit log and appears in the desktop console.
+
+### The Android app
+
+Sideloaded, not on the Play Store: download the APK from the release page and install it.
+It is built by CI, so nothing has to be installed on your development machine.
+
+The app polls every few seconds rather than holding a live connection, because Android
+suspends sockets as soon as an app leaves the foreground. That also means **it cannot give
+you instant crash alerts** — there is no cloud service to push from. Real push would need
+Firebase and a component the server talks out to, which is the hosting and trust question
+Tailscale was chosen to avoid.
+
+The released APK is **debug-signed**, which is fine for sideloading onto your own phone but
+means it is marked debuggable. If you would rather it were not, add a release keystore to
+the repository secrets and switch the workflow to `assembleRelease`.
 
 ## How it works
 
@@ -251,7 +309,9 @@ src/ServerLauncher.Core/   Supervision logic, no UI dependencies
   Backup/                  Archiving with retention
   Updates/                 Release checking, download verification, self-install
   Storage/                 Atomic JSON persistence
+  Remote/                  Device pairing, tokens, the HTTP API, audit log
 src/ServerLauncher.App/    WPF interface (MVVM)
+android/                   Android app (Kotlin, Jetpack Compose), built by CI
 tests/                     132 tests
 demo/                      A stand-in game server for trying things out
 ```

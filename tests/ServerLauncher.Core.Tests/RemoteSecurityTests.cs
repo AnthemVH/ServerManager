@@ -27,8 +27,17 @@ public sealed class DeviceStoreTests : IDisposable
         store.Add("Phone", token, DeviceCapabilities.Default);
 
         var contents = File.ReadAllText(Path.Combine(_root, "devices.json"));
+
+        // Base64url tokens contain no characters JSON escapes, so a raw search is a fair
+        // test that the plaintext is absent.
         contents.Should().NotContain(token, "the plaintext token must never be persisted");
-        contents.Should().Contain(DeviceStore.HashToken(token), "only the hash is stored");
+
+        // The hash is plain base64 and can contain '+' or '/', which the JSON encoder
+        // escapes, so compare the parsed value rather than the raw file text.
+        var stored = System.Text.Json.JsonDocument.Parse(contents)
+            .RootElement[0].GetProperty("TokenHash").GetString();
+
+        stored.Should().Be(DeviceStore.HashToken(token), "only the hash is stored");
     }
 
     [Fact]

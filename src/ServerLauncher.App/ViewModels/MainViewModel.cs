@@ -434,7 +434,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     [RelayCommand]
     private void OpenSettings()
     {
-        var dialog = new SettingsWindow(_manager.Settings)
+        var dialog = new SettingsWindow(_manager.Settings, App.Current.Remote)
         {
             Owner = Application.Current.MainWindow
         };
@@ -443,6 +443,9 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         {
             _manager.SaveSettings(dialog.Settings);
             StatusMessage = "Settings saved. Console and log limits apply to newly started servers.";
+
+            // Remote access may have just been switched on or off, or moved port.
+            _ = App.Current.ApplyRemoteAccessAsync(reportFailure: true);
         }
     }
 

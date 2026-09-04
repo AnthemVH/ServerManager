@@ -7,6 +7,7 @@ using ServerLauncher.App.ViewModels;
 using ServerLauncher.App.TrayIcon;
 using ServerLauncher.App.Views;
 using ServerLauncher.Core.Models;
+using ServerLauncher.Core.Remote;
 using ServerLauncher.Core.Storage;
 using ServerLauncher.Core.Supervision;
 
@@ -526,6 +527,66 @@ public sealed class UiSmokeTests : IDisposable
                 loaded.BackupRetentionCount.Should().Be(original.BackupRetentionCount);
                 loaded.EnvironmentVariables.Should().BeEquivalentTo(original.EnvironmentVariables);
                 loaded.CleanExitCodes.Should().BeEquivalentTo(original.CleanExitCodes);
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+    }
+
+    [WpfFact]
+    public void PairingWindow_BuildsAndRendersItsQrCode()
+    {
+        // The QR is generated and drawn at runtime, so a failure here would only show up
+        // when someone actually tried to pair a phone.
+        WpfHarness.RunOnUi(() =>
+        {
+            using var collector = new BindingErrorCollector();
+
+            var manager = CreateIsolatedManager();
+            var devices = new DeviceStore(Path.Combine(_configRoot, "devices.json"));
+            var pairing = new PairingService(devices);
+
+            var settings = new AppSettings();
+            settings.RemoteAccess.PhoneAddress = "http://100.101.102.103:8787";
+
+            var window = (PairingWindow)Offscreen(new PairingWindow(pairing, settings));
+            try
+            {
+                window.Show();
+                WpfHarness.Pump(window);
+
+                AssertNoBindingErrors(collector, "PairingWindow");
+                pairing.HasActiveCode.Should().BeTrue("opening the dialog issues a code");
+            }
+            finally
+            {
+                window.Close();
+                manager.Dispose();
+            }
+
+            pairing.HasActiveCode.Should().BeFalse(
+                "closing the dialog must withdraw the code so a stale QR cannot pair anything");
+        });
+    }
+
+    [WpfFact]
+    public void SettingsWindow_ShowsRemoteAccessWithoutAService()
+    {
+        // Settings is opened before remote access has ever been configured, so it has to
+        // cope with there being no service yet.
+        WpfHarness.RunOnUi(() =>
+        {
+            using var collector = new BindingErrorCollector();
+
+            var window = (SettingsWindow)Offscreen(new SettingsWindow(new AppSettings()));
+            try
+            {
+                window.Show();
+                WpfHarness.Pump(window);
+
+                AssertNoBindingErrors(collector, "SettingsWindow remote section");
             }
             finally
             {

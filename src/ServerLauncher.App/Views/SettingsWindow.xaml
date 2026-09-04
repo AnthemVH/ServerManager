@@ -2,10 +2,10 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="Application settings"
-        Height="540" Width="540"
+        Height="700" Width="580"
         Background="{StaticResource Bg.Window}"
         WindowStartupLocation="CenterOwner"
-        ResizeMode="CanMinimize"
+        ResizeMode="CanResize"
         ShowInTaskbar="False">
 
     <Grid>
@@ -54,6 +54,65 @@
                            Text="Checking never installs anything on its own — you are told a version is available and choose when to apply it, because updating restarts your game servers." />
                 <TextBlock Style="{StaticResource Hint}"
                            Text="Private repositories need a token in the SERVERLAUNCHER_GITHUB_TOKEN environment variable. It is deliberately not stored in settings, so no credential ends up in a plaintext file." />
+
+                <TextBlock Text="Remote access" Style="{StaticResource SectionHeading}" />
+
+                <TextBlock Style="{StaticResource Hint}" Margin="0,0,0,8"
+                           Text="Lets a paired phone view your servers and start, stop and restart them. Off unless you turn it on. Paired phones can never add a server or change a script path — only the servers you have already set up here can be controlled." />
+
+                <CheckBox x:Name="RemoteEnabledBox" Content="Allow remote control from paired devices" />
+
+                <TextBlock Text="Port on this machine" Style="{StaticResource Label}" />
+                <TextBox x:Name="RemotePortBox" Width="110" HorizontalAlignment="Left" />
+                <TextBlock Style="{StaticResource Hint}"
+                           Text="The API listens on 127.0.0.1 only. Publish it to your phone with Tailscale: run  tailscale serve --bg 8787  on this machine." />
+
+                <TextBlock Text="Address phones should connect to" Style="{StaticResource Label}" />
+                <TextBox x:Name="RemotePhoneAddressBox" FontFamily="{StaticResource Font.Mono}" FontSize="11.5" />
+                <TextBlock x:Name="TailscaleStatusText" Style="{StaticResource Hint}" />
+
+                <TextBlock x:Name="RemoteStatusText" Style="{StaticResource Hint}" Margin="0,8,0,0" />
+
+                <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
+                    <Button Content="Pair a phone" Style="{StaticResource PrimaryButton}"
+                            Click="OnPairDevice" />
+                    <Button Content="Copy serve command" Style="{StaticResource ToolButton}"
+                            Click="OnCopyServeCommand" Margin="0" />
+                </StackPanel>
+
+                <TextBlock Text="Paired devices" Style="{StaticResource Label}" Margin="0,16,0,4" />
+                <Border Background="{StaticResource Bg.Panel}" CornerRadius="4" Padding="4"
+                        BorderBrush="{StaticResource Border.Subtle}" BorderThickness="1">
+                    <StackPanel>
+                        <ItemsControl x:Name="DeviceList">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Border Padding="10,8" Margin="2"
+                                            Background="{StaticResource Bg.Elevated}" CornerRadius="3">
+                                        <DockPanel>
+                                            <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                                                <CheckBox Content="Commands"
+                                                          IsChecked="{Binding CanSendCommands, Mode=TwoWay}"
+                                                          ToolTip="Allow this device to type commands into a running server console"
+                                                          VerticalAlignment="Center" Margin="0,0,10,0" />
+                                                <Button Content="Revoke" Style="{StaticResource DangerButton}"
+                                                        Padding="10,3" FontSize="11" Margin="0"
+                                                        Tag="{Binding Id}" Click="OnRevokeDevice" />
+                                            </StackPanel>
+                                            <StackPanel>
+                                                <TextBlock Text="{Binding Name}" FontWeight="SemiBold" />
+                                                <TextBlock Text="{Binding Detail}" Style="{StaticResource Hint}"
+                                                           Margin="0,2,0,0" />
+                                            </StackPanel>
+                                        </DockPanel>
+                                    </Border>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                        <TextBlock x:Name="NoDevicesText" Text="No devices paired."
+                                   Style="{StaticResource Hint}" Margin="10,8" />
+                    </StackPanel>
+                </Border>
 
                 <TextBlock Text="PowerShell" Style="{StaticResource SectionHeading}" />
 
