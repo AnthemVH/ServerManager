@@ -47,21 +47,49 @@ jobs:
           echo "code=$CODE" >> "$GITHUB_OUTPUT"
           echo "Building $VERSION (versionCode $CODE)"
 
+      # A stable signing key matters: Android refuses to install an APK over one signed
+      # by a different key, so a per-run debug key would break every update.
+      - name: Restore the signing keystore
+        id: keystore
+        if: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
+        shell: bash
+        run: |
+          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > "$RUNNER_TEMP/servermanager.jks"
+          echo "path=$RUNNER_TEMP/servermanager.jks" >> "$GITHUB_OUTPUT"
+
       - name: Build APK
         working-directory: android
+        shell: bash
+        env:
+          SERVERMANAGER_KEYSTORE: ${{ steps.keystore.outputs.path }}
+          SERVERMANAGER_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          SERVERMANAGER_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          SERVERMANAGER_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
-          chmod +x ./gradlew || true
           gradle wrapper --gradle-version 8.7 --no-daemon
-          ./gradlew assembleDebug --no-daemon \
-            -PappVersionName=${{ steps.version.outputs.name }} \
-            -PappVersionCode=${{ steps.version.outputs.code }}
+
+          # Release when a keystore is available, debug otherwise, so the build still
+          # works for anyone who has not set the secrets up.
+          if [ -n "$SERVERMANAGER_KEYSTORE" ]; then
+            echo "Signing with the release keystore."
+            ./gradlew assembleRelease --no-daemon \
+              -PappVersionName=${{ steps.version.outputs.name }} \
+              -PappVersionCode=${{ steps.version.outputs.code }}
+          else
+            echo "::warning::No ANDROID_KEYSTORE_BASE64 secret set, so this APK is debug-signed. Updates will not install over a differently signed build."
+            ./gradlew assembleDebug --no-daemon \
+              -PappVersionName=${{ steps.version.outputs.name }} \
+              -PappVersionCode=${{ steps.version.outputs.code }}
+          fi
 
       - name: Name the APK
         shell: bash
         run: |
           mkdir -p artifacts
-          cp android/app/build/outputs/apk/debug/app-debug.apk \
-             "artifacts/ServerManager-${{ steps.version.outputs.name }}.apk"
+          APK=$(find android/app/build/outputs/apk -name '*.apk' ! -name '*unsigned*' | head -1)
+          if [ -z "$APK" ]; then echo "No signed APK was produced." >&2; exit 1; fi
+          echo "Packaging $APK"
+          cp "$APK" "artifacts/ServerManager-${{ steps.version.outputs.name }}.apk"
 
       - uses: actions/upload-artifact@v5
         with:

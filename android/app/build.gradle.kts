@@ -9,7 +9,9 @@ android {
 
     defaultConfig {
         applicationId = "com.anthemvh.servermanager"
-        minSdk = 26
+        // 24 rather than 26: nothing here needs Oreo, and a lower floor is one less
+        // reason for a phone to refuse the install.
+        minSdk = 24
         targetSdk = 34
 
         // Overridden by CI from the release tag so the app reports the same version as
@@ -18,9 +20,28 @@ android {
         versionName = project.findProperty("appVersionName") as String? ?: "1.0.0"
     }
 
+    // Signed with a keystore supplied by CI when the repository secrets are present.
+    // Without a stable key, every build would be signed differently and Android would
+    // refuse to install one over another.
+    val keystorePath = System.getenv("SERVERMANAGER_KEYSTORE")
+
+    signingConfigs {
+        if (!keystorePath.isNullOrBlank()) {
+            create("release") {
+                storeFile = file(keystorePath)
+                storePassword = System.getenv("SERVERMANAGER_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("SERVERMANAGER_KEY_ALIAS") ?: "servermanager"
+                keyPassword = System.getenv("SERVERMANAGER_KEY_PASSWORD")
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
+            if (!keystorePath.isNullOrBlank()) {
+                signingConfig = signingConfigs.getByName("release")
+            }
         }
     }
 
@@ -59,11 +80,10 @@ dependencies {
     // than plain SharedPreferences.
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
 
-    // QR scanning for pairing.
-    implementation("androidx.camera:camera-camera2:1.3.4")
-    implementation("androidx.camera:camera-lifecycle:1.3.4")
-    implementation("androidx.camera:camera-view:1.3.4")
-    implementation("com.google.mlkit:barcode-scanning:17.2.0")
+    // No ML Kit or CameraX. Scanning a QR code through them dragged in Google Play
+    // Services and Firebase: roughly 30 MB, a 4 MB native barcode library, and a set of
+    // content providers and services this app has no use for. Pairing by typing the
+    // address and an eight-character code needs none of it.
 
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")

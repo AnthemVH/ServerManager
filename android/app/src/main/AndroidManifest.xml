@@ -3,12 +3,9 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
 
-    <!-- Only for scanning the pairing QR code; pairing also works by typing the details. -->
-    <uses-permission android:name="android.permission.CAMERA" />
-    <uses-feature android:name="android.hardware.camera" android:required="false" />
-
     <application
         android:allowBackup="false"
+        android:usesCleartextTraffic="true"
         android:label="ServerManager"
         android:icon="@mipmap/ic_launcher"
         android:supportsRtl="true"
