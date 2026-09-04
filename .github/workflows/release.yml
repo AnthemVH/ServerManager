@@ -91,7 +91,7 @@ jobs:
           Write-Host "SHA256: $hash"
 
       - name: Collect the Android APK
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           name: android-apk
           path: publish
