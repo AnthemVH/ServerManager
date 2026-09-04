@@ -51,11 +51,20 @@ jobs:
       # by a different key, so a per-run debug key would break every update.
       - name: Restore the signing keystore
         id: keystore
-        if: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
+        # Tested inside the script rather than in an `if:`, because the secrets context
+        # is not available to step conditions and referencing it there is a syntax error
+        # that stops the whole workflow registering.
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
         shell: bash
         run: |
-          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > "$RUNNER_TEMP/servermanager.jks"
-          echo "path=$RUNNER_TEMP/servermanager.jks" >> "$GITHUB_OUTPUT"
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/servermanager.jks"
+            echo "path=$RUNNER_TEMP/servermanager.jks" >> "$GITHUB_OUTPUT"
+            echo "Keystore restored."
+          else
+            echo "No signing keystore secret is set."
+          fi
 
       - name: Build APK
         working-directory: android
