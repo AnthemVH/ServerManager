@@ -12,7 +12,7 @@ using ServerLauncher.Core.Supervision;
 namespace ServerLauncher.Core.Tests;
 
 /// <summary>
-/// Drives the real API over a real Kestrel listener on loopback.
+/// Drives the real API over a real listener on loopback, which is where it lives.
 /// </summary>
 /// <remarks>
 /// Everything here runs against the same code paths a phone would hit, because the
@@ -165,6 +165,78 @@ public sealed class RemoteApiTests : IAsyncLifetime
         // Serving the page anonymously must not have opened up the data behind it.
         (await _client.GetAsync("/")).StatusCode.Should().Be(HttpStatusCode.OK);
         (await _client.GetAsync("/api/v1/servers")).StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+    }
+
+    // --- Update script ---
+
+    [Fact]
+    public async Task UpdatingIsRefusedWhenNoUpdateScriptIsConfigured()
+    {
+        // The test server has none, so this also proves the endpoint will not silently
+        // succeed at doing nothing.
+        using var client = await PairAsync();
+
+        var response = await client.PostAsync($"/api/v1/servers/{_serverId}/update", null);
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        (await response.Content.ReadAsStringAsync()).Should().Contain("No update script");
+    }
+
+    [Fact]
+    public async Task UpdatingNeedsTheControlCapability()
+    {
+        // It stops and restarts the server, so it belongs with start and stop rather
+        // than with viewing.
+        using var client = await PairAsync(DeviceCapabilities.View);
+
+        var response = await client.PostAsync($"/api/v1/servers/{_serverId}/update", null);
+
+        response.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+    }
+
+    [Fact]
+    public async Task TheApiCannotChooseWhichScriptAnUpdateRuns()
+    {
+        // The whole reason running an update remotely is acceptable: the script was
+        // chosen on the desktop. A body naming a different one must be ignored.
+        using var client = await PairAsync();
+
+        var payload = JsonContent.Create(new { updateScriptPath = @"C:\Windows\System32\cmd.exe" });
+        await client.PostAsync($"/api/v1/servers/{_serverId}/update", payload);
+
+        _manager.Instances.Single().Definition.UpdateScriptPath
+            .Should().BeEmpty("nothing in a request may set a script path");
+    }
+
+    [Fact]
+    public async Task ServerSummariesSayWhetherAnUpdateIsAvailableToRun()
+    {
+        using var client = await PairAsync();
+
+        var servers = await client.GetFromJsonAsync<List<ServerSummary>>("/api/v1/servers");
+
+        servers.Should().NotBeNull();
+        servers!.Single().CanRunUpdate.Should().BeFalse("this server has no update script");
+        servers!.Single().IsUpdating.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task ServerSummariesCarryTheSchedule()
+    {
+        var definition = _manager.Instances.Single().Definition;
+        definition.Schedule.Add(new ScheduledTask
+        {
+            Action = ScheduledAction.Restart,
+            Time = "05:00",
+            Days = ScheduleDays.Monday | ScheduleDays.Thursday
+        });
+
+        using var client = await PairAsync();
+
+        var servers = await client.GetFromJsonAsync<List<ServerSummary>>("/api/v1/servers");
+
+        servers.Should().NotBeNull();
+        servers!.Single().Schedule.Should().Be("Restart · 05:00 · Mon, Thu");
     }
 
     // --- The boundary the whole design rests on ---

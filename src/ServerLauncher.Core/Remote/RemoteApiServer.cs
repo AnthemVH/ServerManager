@@ -16,17 +16,13 @@ namespace ServerLauncher.Core.Remote;
 /// </summary>
 /// <remarks>
 /// <para>
-/// Kestrel, because this has to listen on a public address with TLS. HttpListener runs on
-/// http.sys, which refuses any prefix but loopback without a URL reservation created by an
-/// administrator and needs a second admin step to attach a certificate to the port;
-/// ServerManager runs unelevated so it can replace its own executable when updating.
-/// Kestrel binds the socket itself and takes a certificate directly.
+/// Bound to loopback, always. Only something already running on this machine can reach
+/// it, which is what makes the browser interface safe to leave on: there is no open port,
+/// no certificate to keep renewed and no internet-facing surface to get wrong.
 /// </para>
 /// <para>
-/// The cost is that Microsoft.AspNetCore.App becomes a required framework, so the machine
-/// needs the ASP.NET Core runtime as well as the Desktop one. Nothing in the app can
-/// guard that: a missing required framework stops the process before any of its code
-/// runs, so it is a release-notes matter.
+/// The device tokens and throttling below still apply. Loopback is not a trust boundary
+/// between programs on the same machine, and this API starts processes.
 /// </para>
 /// <para>
 /// The API can start, stop and inspect servers that already exist. It has no endpoint that
@@ -76,20 +72,6 @@ public sealed class RemoteApiServer : IAsyncDisposable
         {
             throw new InvalidOperationException($"{settings.Port} is not a usable port.");
         }
-
-        if (!settings.PublishDirectly)
-        {
-            return;
-        }
-
-        // Publishing without TLS would put device tokens on the wire in clear text for
-        // anyone on the path. There is no version of that worth offering.
-        if (!settings.HasCertificate)
-        {
-            throw new InvalidOperationException(
-                "Publishing directly requires a TLS certificate. Set a certificate "
-                + "thumbprint or a .pfx path before turning it on.");
-        }
     }
 
     public async Task StartAsync(RemoteAccessSettings settings)
@@ -105,17 +87,12 @@ public sealed class RemoteApiServer : IAsyncDisposable
         var builder = WebApplication.CreateSlimBuilder();
         builder.Logging.ClearProviders();
 
-        var address = settings.PublishDirectly ? IPAddress.Any : IPAddress.Loopback;
-
         builder.WebHost.ConfigureKestrel(options =>
         {
-            options.Listen(address, settings.Port, listen =>
-            {
-                if (settings.PublishDirectly)
-                {
-                    listen.UseHttps(CertificateResolver.Resolve(settings));
-                }
-            });
+            // IPAddress.Loopback, not IPAddress.Any: binding the wildcard would expose a
+            // process-starting API to the network, and nothing here is meant to leave
+            // this machine.
+            options.Listen(IPAddress.Loopback, settings.Port);
 
             // Everything here is a small JSON document or one HTML page.
             options.Limits.MaxRequestBodySize = 64 * 1024;
@@ -137,9 +114,7 @@ public sealed class RemoteApiServer : IAsyncDisposable
 
         _app = app;
 
-        var scheme = settings.PublishDirectly ? "https" : "http";
-        var host = settings.PublishDirectly ? "0.0.0.0" : "127.0.0.1";
-        ListeningOn = $"{scheme}://{host}:{settings.Port}";
+        ListeningOn = settings.LocalAddress;
     }
 
     public async Task StopAsync()
@@ -492,6 +467,26 @@ public sealed class RemoteApiServer : IAsyncDisposable
                     await instance.RestartAsync().ConfigureAwait(false);
                     break;
 
+                case "update":
+                    // Runs a script the desktop already configured for this server. It
+                    // cannot choose what to run, so this is the same kind of action as
+                    // start and stop, not a way to execute something new.
+                    if (!instance.Definition.HasUpdateScript)
+                    {
+                        context.Response.StatusCode = StatusCodes.Status400BadRequest;
+                        await context.Response
+                            .WriteAsJsonAsync(new ApiError("No update script is configured for this server."))
+                            .ConfigureAwait(false);
+                        return;
+                    }
+
+                    _audit.Record(device.Name, "Ran the update script", instance.Definition.Name);
+
+                    // Not awaited: an update can take many minutes and the caller is a
+                    // browser waiting on an HTTP response.
+                    _ = instance.RunUpdateAsync();
+                    break;
+
                 default:
                     context.Response.StatusCode = StatusCodes.Status404NotFound;
                     await context.Response
@@ -530,7 +525,19 @@ public sealed class RemoteApiServer : IAsyncDisposable
             instance.Uptime is { } uptime ? FormatDuration(uptime) : "—",
             instance.State is ServerState.Stopped or ServerState.Crashed or ServerState.Failed,
             instance.State is ServerState.Running or ServerState.Starting,
-            instance.IsLauncherDetached);
+            instance.IsLauncherDetached,
+            instance.Definition.HasUpdateScript && !instance.IsUpdating,
+            instance.IsUpdating,
+            DescribeSchedule(instance.Definition));
+    }
+
+    private static string DescribeSchedule(ServerDefinition definition)
+    {
+        var active = definition.Schedule.Where(t => t.Enabled).ToList();
+
+        return active.Count == 0
+            ? string.Empty
+            : string.Join("  ·  ", active.Select(t => t.Describe()));
     }
 
     private static string FormatDuration(TimeSpan value) =>

@@ -140,8 +140,8 @@ public partial class App : Application
     }
 
     /// <summary>
-    /// Opens the browser interface on this machine. The API listens on loopback, so this
-    /// is the address that works here; a phone reaches it through Tailscale Serve.
+    /// Opens the browser interface. It listens on loopback, so this address is the only
+    /// one that reaches it, and only from this machine.
     /// </summary>
     public void OpenBrowserInterface()
     {

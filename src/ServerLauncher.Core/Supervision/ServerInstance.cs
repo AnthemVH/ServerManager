@@ -31,6 +31,13 @@ public sealed class ServerInstance : IDisposable
     private readonly object _historyGate = new();
     private readonly object _detachGate = new();
 
+    /// <summary>
+    /// Held for the whole stop-update-start sequence. Separate from <see cref="_gate"/>,
+    /// which that sequence takes and releases several times, and which an update must not
+    /// be holding while it waits minutes for a mod download.
+    /// </summary>
+    private readonly SemaphoreSlim _updateGate = new(1, 1);
+
     private ServerProcess? _process;
     private CancellationTokenSource? _pendingRestart;
     private int _consecutiveFailures;
@@ -84,6 +91,16 @@ public sealed class ServerInstance : IDisposable
     public event Action<ServerInstance, LogLine>? LineAppended;
     public event Action<ServerInstance, ResourceSample>? ResourceSampled;
 
+    /// <summary>Raised when an update script starts or finishes, for the UI to reflect.</summary>
+    public event Action<ServerInstance, bool>? UpdatingChanged;
+
+    /// <summary>
+    /// True while the update script is running. Deliberately not a
+    /// <see cref="ServerState"/>: the server really is stopped during an update, and
+    /// folding the two together would mean every restart decision had to special-case it.
+    /// </summary>
+    public bool IsUpdating { get; private set; }
+
     public IReadOnlyList<LogLine> ConsoleSnapshot() => _console.Snapshot();
 
     /// <summary>Live process IDs in this server's tree.</summary>
@@ -113,6 +130,14 @@ public sealed class ServerInstance : IDisposable
 
     public async Task StartAsync(CancellationToken cancellationToken = default)
     {
+        // Before the gate, because the update can take minutes and holding the gate would
+        // block a stop request for all of it. A failed update does not block the start:
+        // an out-of-date server running beats a server that will not come up.
+        if (Definition.RunUpdateBeforeStart && Definition.HasUpdateScript && !IsUpdating)
+        {
+            await RunUpdateScriptAsync(cancellationToken).ConfigureAwait(false);
+        }
+
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
@@ -201,6 +226,147 @@ public sealed class ServerInstance : IDisposable
         // Give the OS a moment to release ports and file locks before relaunching.
         await Task.Delay(TimeSpan.FromSeconds(2), cancellationToken).ConfigureAwait(false);
         await StartAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    // --- Update script ---
+
+    /// <summary>
+    /// Runs this server's update script, stopping the server first if it is running and
+    /// bringing it back afterwards.
+    /// </summary>
+    /// <remarks>
+    /// Stopping first is not optional in practice: a mod updater overwrites files the
+    /// running server holds open, so letting it run against a live server would leave a
+    /// half-updated install. A server that was already stopped stays stopped, because the
+    /// obvious reason to update a stopped server is to update it before starting it later.
+    /// </remarks>
+    /// <returns>True if the update script ran and reported success.</returns>
+    public async Task<bool> RunUpdateAsync(CancellationToken cancellationToken = default)
+    {
+        if (!Definition.HasUpdateScript)
+        {
+            Append(LogLine.Launcher("No update script is configured for this server."));
+            return false;
+        }
+
+        await _updateGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            var wasRunning = State is ServerState.Running or ServerState.Starting;
+
+            if (wasRunning)
+            {
+                Append(LogLine.Launcher("Stopping the server so the update can replace its files."));
+                await StopAsync(cancellationToken).ConfigureAwait(false);
+            }
+
+            var succeeded = await RunUpdateScriptCoreAsync(cancellationToken).ConfigureAwait(false);
+
+            if (wasRunning)
+            {
+                // Restarted whether or not the update succeeded. The server was up when
+                // the user asked for this, and leaving it down because an update failed
+                // would turn a failed update into an outage.
+                Append(LogLine.Launcher("Starting the server again after the update."));
+                await StartAsync(cancellationToken).ConfigureAwait(false);
+            }
+
+            return succeeded;
+        }
+        finally
+        {
+            _updateGate.Release();
+        }
+    }
+
+    /// <summary>
+    /// Runs the update script without touching the server's state, for the case where the
+    /// caller already knows the server is not running.
+    /// </summary>
+    private async Task<bool> RunUpdateScriptAsync(CancellationToken cancellationToken)
+    {
+        await _updateGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            return await RunUpdateScriptCoreAsync(cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _updateGate.Release();
+        }
+    }
+
+    private async Task<bool> RunUpdateScriptCoreAsync(CancellationToken cancellationToken)
+    {
+        SetUpdating(true);
+        Append(LogLine.Launcher($"Running update script {Definition.UpdateScriptPath}"));
+
+        ServerProcess? update = null;
+
+        try
+        {
+            update = ServerProcess.Start(Definition.CreateUpdateDefinition(), _settings);
+            update.LineReceived += OnLineReceived;
+
+            var timeout = TimeSpan.FromMinutes(Math.Clamp(Definition.UpdateTimeoutMinutes, 1, 24 * 60));
+
+            var finished = await Task.WhenAny(
+                update.ExitTask,
+                Task.Delay(timeout, cancellationToken)).ConfigureAwait(false);
+
+            if (finished != update.ExitTask)
+            {
+                // The job object takes the whole tree down, so an updater that spawned
+                // its own downloader cannot survive this.
+                Append(LogLine.Launcher(
+                    $"Update script did not finish within {timeout.TotalMinutes:0} minutes; stopping it."));
+                update.Kill();
+                return false;
+            }
+
+            var exitCode = await update.ExitTask.ConfigureAwait(false);
+
+            if (exitCode == 0)
+            {
+                Append(LogLine.Launcher("Update script finished successfully."));
+                return true;
+            }
+
+            Append(LogLine.Launcher($"Update script failed with exit code {exitCode}."));
+            return false;
+        }
+        catch (OperationCanceledException)
+        {
+            Append(LogLine.Launcher("Update cancelled."));
+            update?.Kill();
+            return false;
+        }
+        catch (Exception ex)
+        {
+            Append(LogLine.Launcher($"Could not run the update script: {ex.Message}"));
+            return false;
+        }
+        finally
+        {
+            if (update is not null)
+            {
+                update.LineReceived -= OnLineReceived;
+                update.Dispose();
+            }
+
+            SetUpdating(false);
+        }
+    }
+
+    private void SetUpdating(bool value)
+    {
+        if (IsUpdating == value)
+        {
+            return;
+        }
+
+        IsUpdating = value;
+        UpdatingChanged?.Invoke(this, value);
     }
 
     /// <summary>Sends a console command to the running server via stdin.</summary>
@@ -493,6 +659,7 @@ public sealed class ServerInstance : IDisposable
         _disposed = true;
         CancelPendingRestart();
         _process?.Dispose();
+        _updateGate.Dispose();
         _logWriter.Dispose();
         _gate.Dispose();
     }

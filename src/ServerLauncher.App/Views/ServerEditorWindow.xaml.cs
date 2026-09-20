@@ -1,7 +1,9 @@
-using System.Globalization;
+using System.Collections.ObjectModel;
 using System.IO;
 using System.Windows;
+using System.Windows.Controls;
 using Microsoft.Win32;
+using ServerLauncher.App.ViewModels;
 using ServerLauncher.Core.Models;
 using ServerLauncher.Core.Processes;
 
@@ -13,6 +15,8 @@ namespace ServerLauncher.App.Views;
 /// </summary>
 public partial class ServerEditorWindow : Window
 {
+    private readonly ObservableCollection<ScheduleRow> _schedule = new();
+
     public ServerEditorWindow(ServerDefinition definition, bool isNew)
     {
         InitializeComponent();
@@ -32,6 +36,9 @@ public partial class ServerEditorWindow : Window
             BackupMode.SafeStopAndRestart,
             BackupMode.Live
         };
+
+        ScheduleList.ItemsSource = _schedule;
+        _schedule.CollectionChanged += (_, _) => RefreshScheduleEmptyState();
 
         Load(definition);
     }
@@ -54,22 +61,81 @@ public partial class ServerEditorWindow : Window
         CleanExitCodesBox.Text = string.Join(", ", d.CleanExitCodes);
         MaxRestartsBox.Text = d.MaxConsecutiveRestarts.ToString();
         StableMinutesBox.Text = d.StableUptimeMinutes.ToString();
-        ScheduledRestartBox.Text = d.ScheduledRestartTime;
+
+        UpdateScriptBox.Text = d.UpdateScriptPath;
+        UpdateArgumentsBox.Text = d.UpdateArguments;
+        UpdateTimeoutBox.Text = d.UpdateTimeoutMinutes.ToString();
+        RunUpdateBeforeStartBox.IsChecked = d.RunUpdateBeforeStart;
+
+        // Migrated on load by ServerManager, so an old daily restart time is already a
+        // schedule entry by the time the editor sees it.
+        _schedule.Clear();
+        foreach (var task in d.Schedule)
+        {
+            _schedule.Add(new ScheduleRow(task));
+        }
+
+        RefreshScheduleEmptyState();
 
         BackupEnabledBox.IsChecked = d.BackupEnabled;
         BackupSourceBox.Text = d.BackupSourceFolder;
         BackupDestBox.Text = d.BackupDestinationFolder;
         BackupModeBox.SelectedItem = d.BackupMode;
-        BackupTimeBox.Text = d.BackupScheduleTime;
         RetentionBox.Text = d.BackupRetentionCount.ToString();
+    }
+
+    private void RefreshScheduleEmptyState() =>
+        NoScheduleText.Visibility = _schedule.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+
+    private void OnAddScheduleEntry(object sender, RoutedEventArgs e)
+    {
+        // Defaults to the commonest thing anyone adds a schedule for.
+        _schedule.Add(new ScheduleRow(new ScheduledTask
+        {
+            Action = ScheduledAction.Restart,
+            Time = "05:00",
+            Days = ScheduleDays.EveryDay
+        }));
+    }
+
+    private void OnRemoveScheduleEntry(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button { Tag: Guid id })
+        {
+            return;
+        }
+
+        var row = _schedule.FirstOrDefault(r => r.Id == id);
+        if (row is not null)
+        {
+            _schedule.Remove(row);
+        }
     }
 
     private void OnSave(object sender, RoutedEventArgs e)
     {
-        if (!Validate(out var error))
+        if (!Apply(out var error))
         {
             ValidationText.Text = error;
             return;
+        }
+
+        DialogResult = true;
+    }
+
+    /// <summary>
+    /// Validates the form and writes every field into <see cref="Definition"/>.
+    /// </summary>
+    /// <remarks>
+    /// Separate from the Save button so the round trip can be tested: DialogResult can
+    /// only be set on a window shown with ShowDialog, which a headless test cannot do.
+    /// </remarks>
+    /// <returns>False if the form is not valid, in which case nothing is written.</returns>
+    public bool Apply(out string error)
+    {
+        if (!Validate(out error))
+        {
+            return false;
         }
 
         var d = Definition;
@@ -87,16 +153,26 @@ public partial class ServerEditorWindow : Window
         d.CleanExitCodes = ParseExitCodes(CleanExitCodesBox.Text);
         d.MaxConsecutiveRestarts = ParseInt(MaxRestartsBox.Text, 5, min: 1);
         d.StableUptimeMinutes = ParseInt(StableMinutesBox.Text, 5, min: 1);
-        d.ScheduledRestartTime = ScheduledRestartBox.Text.Trim();
+
+        d.UpdateScriptPath = UpdateScriptBox.Text.Trim();
+        d.UpdateArguments = UpdateArgumentsBox.Text.Trim();
+        d.UpdateTimeoutMinutes = ParseInt(UpdateTimeoutBox.Text, 30, min: 1);
+        d.RunUpdateBeforeStart = RunUpdateBeforeStartBox.IsChecked == true;
+
+        d.Schedule = _schedule.Select(row => row.ToTask()).ToList();
+
+        // The old single-time fields are dead once a schedule exists; clearing them here
+        // stops a stale value being migrated back in on the next load.
+        d.ScheduledRestartTime = string.Empty;
+        d.BackupScheduleTime = string.Empty;
 
         d.BackupEnabled = BackupEnabledBox.IsChecked == true;
         d.BackupSourceFolder = BackupSourceBox.Text.Trim();
         d.BackupDestinationFolder = BackupDestBox.Text.Trim();
         d.BackupMode = (BackupMode)(BackupModeBox.SelectedItem ?? BackupMode.SafeStopAndRestart);
-        d.BackupScheduleTime = BackupTimeBox.Text.Trim();
         d.BackupRetentionCount = ParseInt(RetentionBox.Text, 5, min: 0);
 
-        DialogResult = true;
+        return true;
     }
 
     private bool Validate(out string error)
@@ -135,15 +211,54 @@ public partial class ServerEditorWindow : Window
             return false;
         }
 
-        if (!IsValidTime(ScheduledRestartBox.Text))
+        var updateScript = UpdateScriptBox.Text.Trim();
+        if (updateScript.Length > 0)
         {
-            error = "Daily restart time must be in HH:mm form, or empty.";
+            if (!File.Exists(updateScript))
+            {
+                error = "That update script does not exist.";
+                return false;
+            }
+
+            if (!ScriptLauncher.IsSupportedScript(updateScript))
+            {
+                error = "An update script must be a .bat, .cmd, .ps1 or .exe file.";
+                return false;
+            }
+        }
+
+        if (RunUpdateBeforeStartBox.IsChecked == true && updateScript.Length == 0)
+        {
+            error = "Choose an update script, or untick running it before every start.";
             return false;
         }
 
-        if (!IsValidTime(BackupTimeBox.Text))
+        // A bad time is silently never due, so it has to be caught here rather than
+        // saved as an entry that looks configured and does nothing.
+        if (_schedule.FirstOrDefault(row => !row.HasUsableTime) is { } badTime)
         {
-            error = "Daily backup time must be in HH:mm form, or empty.";
+            error = $"The {ScheduledTask.DescribeAction(badTime.Action).ToLowerInvariant()} "
+                    + "schedule entry needs a time in HH:mm form, such as 05:00.";
+            return false;
+        }
+
+        if (_schedule.FirstOrDefault(row => row.ToTask().Days == ScheduleDays.None) is { } noDays)
+        {
+            error = $"The {ScheduledTask.DescribeAction(noDays.Action).ToLowerInvariant()} "
+                    + "schedule entry needs at least one day ticked.";
+            return false;
+        }
+
+        if (_schedule.Any(row => row.Action == ScheduledAction.RunUpdate) && updateScript.Length == 0)
+        {
+            error = "A schedule entry runs the update script, but no update script is set.";
+            return false;
+        }
+
+        if (_schedule.Any(row => row.Action == ScheduledAction.Backup)
+            && string.IsNullOrWhiteSpace(BackupDestBox.Text))
+        {
+            error = "A schedule entry runs a backup, so backups need a destination folder.";
             return false;
         }
 
@@ -154,14 +269,6 @@ public partial class ServerEditorWindow : Window
         }
 
         return true;
-    }
-
-    private static bool IsValidTime(string text)
-    {
-        text = text.Trim();
-        return text.Length == 0
-            || TimeOnly.TryParseExact(text, "HH:mm", CultureInfo.InvariantCulture,
-                                     DateTimeStyles.None, out _);
     }
 
     /// <summary>
@@ -203,6 +310,28 @@ public partial class ServerEditorWindow : Window
                     ? Path.GetFileNameWithoutExtension(dialog.FileName)
                     : folder;
             }
+        }
+    }
+
+    private void OnBrowseUpdateScript(object sender, RoutedEventArgs e)
+    {
+        var dialog = new OpenFileDialog
+        {
+            Title = "Choose the script that updates this server",
+            Filter = "Update scripts (*.bat;*.cmd;*.ps1;*.exe)|*.bat;*.cmd;*.ps1;*.exe|All files (*.*)|*.*"
+        };
+
+        // Most update scripts sit next to the start script.
+        var startScript = ScriptBox.Text.Trim();
+        if (startScript.Length > 0 && Path.GetDirectoryName(startScript) is { } folder
+            && Directory.Exists(folder))
+        {
+            dialog.InitialDirectory = folder;
+        }
+
+        if (dialog.ShowDialog(this) == true)
+        {
+            UpdateScriptBox.Text = dialog.FileName;
         }
     }
 

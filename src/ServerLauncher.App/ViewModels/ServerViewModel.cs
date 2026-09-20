@@ -46,6 +46,7 @@ public sealed partial class ServerViewModel : ObservableObject, IDisposable
         instance.StateChanged += OnStateChanged;
         instance.LineAppended += OnLineAppended;
         instance.ResourceSampled += OnResourceSampled;
+        instance.UpdatingChanged += OnUpdatingChanged;
     }
 
     public ServerInstance Instance { get; }
@@ -66,6 +67,25 @@ public sealed partial class ServerViewModel : ObservableObject, IDisposable
     public bool CanStart => State is ServerState.Stopped or ServerState.Crashed or ServerState.Failed;
 
     public bool CanStop => State is ServerState.Running or ServerState.Starting;
+
+    /// <summary>True while this server's update script is running.</summary>
+    public bool IsUpdating => Instance.IsUpdating;
+
+    /// <summary>Whether Run update would do anything.</summary>
+    public bool CanRunUpdate => Definition.HasUpdateScript && !IsUpdating;
+
+    /// <summary>A one-line account of when this server does things by itself.</summary>
+    public string ScheduleSummary
+    {
+        get
+        {
+            var active = Definition.Schedule.Where(t => t.Enabled).ToList();
+
+            return active.Count == 0
+                ? "No schedule"
+                : string.Join("  ·  ", active.Select(t => t.Describe()));
+        }
+    }
 
     public string StatusText => State switch
     {
@@ -146,7 +166,16 @@ public sealed partial class ServerViewModel : ObservableObject, IDisposable
     {
         Name = Definition.Name;
         OnPropertyChanged(nameof(Definition));
+        OnPropertyChanged(nameof(CanRunUpdate));
+        OnPropertyChanged(nameof(ScheduleSummary));
     }
+
+    private void OnUpdatingChanged(ServerInstance _, bool updating) =>
+        OnUiThread(() =>
+        {
+            OnPropertyChanged(nameof(IsUpdating));
+            OnPropertyChanged(nameof(CanRunUpdate));
+        });
 
     private void OnStateChanged(ServerInstance _, ServerState state) =>
         OnUiThread(() =>
@@ -212,6 +241,7 @@ public sealed partial class ServerViewModel : ObservableObject, IDisposable
         Instance.StateChanged -= OnStateChanged;
         Instance.LineAppended -= OnLineAppended;
         Instance.ResourceSampled -= OnResourceSampled;
+        Instance.UpdatingChanged -= OnUpdatingChanged;
     }
 }
 

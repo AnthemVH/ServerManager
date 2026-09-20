@@ -38,7 +38,7 @@ public partial class PairingWindow : Window
 
     private void IssueCode()
     {
-        var address = _settings.ResolvePublicAddress();
+        var address = _settings.LocalAddress;
 
         if (string.IsNullOrWhiteSpace(address))
         {

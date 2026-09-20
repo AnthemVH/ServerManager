@@ -296,42 +296,18 @@ public sealed class PairingServiceTests : IDisposable
     }
 }
 
-/// <summary>Covers the rules that stop the API being exposed carelessly.</summary>
-public class PublishingRulesTests
+/// <summary>
+/// Covers the rules that keep the API where it belongs. The browser interface is served
+/// on this machine only, and this pins that it cannot quietly become something else.
+/// </summary>
+public class ListenerRulesTests
 {
     [Fact]
-    public void LoopbackNeedsNoCertificate()
+    public void ALoopbackListenerNeedsNoConfiguration()
     {
-        // The default only listens to this machine, so there is nothing on the wire to
-        // protect and nothing to configure.
+        // Nothing to obtain, nothing to renew, nothing to forward: the default is the
+        // whole design, so turning it on must never fail for want of a setting.
         var act = () => RemoteApiServer.Validate(new RemoteAccessSettings { Enabled = true });
-
-        act.Should().NotThrow();
-    }
-
-    [Fact]
-    public void PublishingWithoutACertificateIsRefused()
-    {
-        // Without TLS the device token would cross the internet in clear text. Refusing is
-        // the only sensible answer; there is no plaintext fallback to offer.
-        var settings = new RemoteAccessSettings { Enabled = true, PublishDirectly = true };
-
-        var act = () => RemoteApiServer.Validate(settings);
-
-        act.Should().Throw<InvalidOperationException>().WithMessage("*requires a TLS certificate*");
-    }
-
-    [Fact]
-    public void PublishingWithACertificateIsAllowed()
-    {
-        var settings = new RemoteAccessSettings
-        {
-            Enabled = true,
-            PublishDirectly = true,
-            CertificateThumbprint = "AABBCCDDEEFF00112233445566778899AABBCCDD"
-        };
-
-        var act = () => RemoteApiServer.Validate(settings);
 
         act.Should().NotThrow();
     }
@@ -348,38 +324,38 @@ public class PublishingRulesTests
     }
 
     [Fact]
-    public void HasCertificateReflectsEitherWayOfConfiguringOne()
+    public void TheAddressOfferedIsAlwaysLoopback()
     {
-        new RemoteAccessSettings().HasCertificate.Should().BeFalse();
-        new RemoteAccessSettings { CertificateThumbprint = "ABC" }.HasCertificate.Should().BeTrue();
-        new RemoteAccessSettings { CertificatePath = @"C:\cert.pfx" }.HasCertificate.Should().BeTrue();
+        // A pairing dialog or a browser button handing out anything else would be
+        // advertising an address that does not answer.
+        new RemoteAccessSettings { Port = 9000 }.LocalAddress.Should().Be("http://127.0.0.1:9000");
     }
 
     [Fact]
-    public void APublicAddressIsHandedToPairingDevices()
+    public void ThereIsNoSettingThatWouldPublishToTheNetwork()
     {
-        var settings = new RemoteAccessSettings
-        {
-            PublishDirectly = true,
-            PublicAddress = "https://servers.example.com/"
-        };
+        // The listener binds IPAddress.Loopback unconditionally. If a later change adds a
+        // way to configure the bind address, this fails and the decision gets made
+        // deliberately rather than by accident — it would put a process-starting API on
+        // the network.
+        var configurable = typeof(RemoteAccessSettings)
+            .GetProperties()
+            .Where(p => p.CanWrite)
+            .Select(p => p.Name)
+            .ToList();
 
-        // Trailing slash trimmed, since the client appends its own paths.
-        settings.ResolvePublicAddress().Should().Be("https://servers.example.com");
+        configurable.Should().BeEquivalentTo(new[] { nameof(RemoteAccessSettings.Enabled), nameof(RemoteAccessSettings.Port) });
     }
 
     [Fact]
-    public void WithoutAPublicAddressLoopbackIsOffered()
+    public void TokensStillGuardTheApi()
     {
-        new RemoteAccessSettings { Port = 8787 }.ResolvePublicAddress()
-            .Should().Be("http://127.0.0.1:8787");
-    }
+        // Loopback is not a boundary between programs on the same machine, and this API
+        // starts processes, so the token layer is not redundant just because the listener
+        // is local.
+        var store = new DeviceStore(Path.Combine(
+            Path.GetTempPath(), "ServerLauncherListenerTests", Guid.NewGuid().ToString("N"), "devices.json"));
 
-    [Fact]
-    public void PublishingWithNoPublicAddressOffersNothingRatherThanLoopback()
-    {
-        // Handing a phone "127.0.0.1" would be worse than admitting we do not know.
-        new RemoteAccessSettings { PublishDirectly = true }.ResolvePublicAddress()
-            .Should().BeEmpty();
+        store.Authenticate("anything-at-all").Should().BeNull();
     }
 }

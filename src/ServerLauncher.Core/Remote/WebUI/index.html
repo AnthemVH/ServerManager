@@ -43,6 +43,8 @@
   .metric .value { font-size: 15px; }
 
   .actions { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+  .schedule { color: #8b949e; font-size: 12px; margin-top: 8px; }
+  .schedule:empty { display: none; }
   button {
     font: inherit; font-size: 14px; padding: 9px 14px; border-radius: 6px;
     border: 1px solid var(--line); background: var(--elevated); color: var(--fg);
@@ -248,16 +250,20 @@
         <div class="metric"><div class="label">Uptime</div><div class="value">${s.uptime}</div></div>
         <div class="metric"><div class="label">Procs</div><div class="value">${s.processCount}</div></div>
       </div>
+      <div class="schedule"></div>
       <div class="actions">
         <button class="primary" data-do="start" ${s.canStart ? "" : "disabled"}>Start</button>
         <button data-do="stop" ${s.canStop ? "" : "disabled"}>Stop</button>
         <button data-do="restart" ${s.canStop ? "" : "disabled"}>Restart</button>
+        <button data-do="update" ${s.canRunUpdate ? "" : "disabled"}>${s.isUpdating ? "Updating…" : "Update"}</button>
         <button class="link" data-open="1">Console &rarr;</button>
       </div>`;
 
-    // Names come from user configuration, so they are set as text, never as HTML.
+    // Names and schedules come from user configuration, so they are set as text,
+    // never as HTML.
     card.querySelector(".name").textContent = s.name;
     card.querySelector(".state").textContent = s.state;
+    card.querySelector(".schedule").textContent = s.schedule || "";
 
     card.querySelectorAll("[data-do]").forEach(b => {
       b.addEventListener("click", async () => {
@@ -322,11 +328,14 @@
           <span class="dot ${s.state}"></span>
           <div class="grow"><div class="name"></div><div class="state"></div></div>
         </div>
+        <div class="schedule"></div>
         <div class="actions">
           <button class="primary" data-do="start" ${s.canStart ? "" : "disabled"}>Start</button>
           <button data-do="stop" ${s.canStop ? "" : "disabled"}>Stop</button>
           <button data-do="restart" ${s.canStop ? "" : "disabled"}>Restart</button>
+          <button data-do="update" ${s.canRunUpdate ? "" : "disabled"}>${s.isUpdating ? "Updating…" : "Update"}</button>
         </div>`;
+      box.querySelector(".schedule").textContent = s.schedule || "";
       box.querySelector(".name").textContent = s.name;
       box.querySelector(".state").textContent =
         `${s.state} · ${s.cpuPercent.toFixed(1)}% CPU · ${Math.round(s.memoryMegabytes)} MB · up ${s.uptime}`;

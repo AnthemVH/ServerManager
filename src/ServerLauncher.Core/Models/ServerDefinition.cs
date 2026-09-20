@@ -62,8 +62,46 @@ public sealed class ServerDefinition
     /// </summary>
     public int StableUptimeMinutes { get; set; } = 5;
 
-    /// <summary>Daily restart time as "HH:mm", or empty for no scheduled restart.</summary>
+    /// <summary>
+    /// Superseded by <see cref="Schedule"/>. Still read so existing servers.json files
+    /// keep working; <see cref="MigrateLegacySchedules"/> moves it across and clears it,
+    /// so nothing has to consult two places to know when a server restarts.
+    /// </summary>
     public string ScheduledRestartTime { get; set; } = string.Empty;
+
+    // --- Schedule ---
+
+    /// <summary>
+    /// Times this server starts, stops, restarts, updates or backs itself up, each on its
+    /// own set of days.
+    /// </summary>
+    public List<ScheduledTask> Schedule { get; set; } = new();
+
+    // --- Update script ---
+
+    /// <summary>
+    /// A .bat, .cmd, .ps1 or .exe that updates the server or its mods. Run on demand,
+    /// on a schedule, or before starting — never automatically on its own.
+    /// </summary>
+    public string UpdateScriptPath { get; set; } = string.Empty;
+
+    /// <summary>Extra arguments appended to the update script invocation.</summary>
+    public string UpdateArguments { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Run the update script every time this server starts. Off by default: an update
+    /// that fetches from the network turns a fast restart into a slow one.
+    /// </summary>
+    public bool RunUpdateBeforeStart { get; set; }
+
+    /// <summary>
+    /// How long to let the update script run before giving up on it. An update that hangs
+    /// would otherwise keep a stopped server stopped indefinitely.
+    /// </summary>
+    public int UpdateTimeoutMinutes { get; set; } = 30;
+
+    /// <summary>Whether an update script is configured at all.</summary>
+    public bool HasUpdateScript => !string.IsNullOrWhiteSpace(UpdateScriptPath);
 
     // --- Backups ---
 
@@ -76,7 +114,7 @@ public sealed class ServerDefinition
 
     public BackupMode BackupMode { get; set; } = BackupMode.SafeStopAndRestart;
 
-    /// <summary>Daily backup time as "HH:mm", or empty for manual backups only.</summary>
+    /// <summary>Superseded by <see cref="Schedule"/>; see <see cref="ScheduledRestartTime"/>.</summary>
     public string BackupScheduleTime { get; set; } = string.Empty;
 
     /// <summary>Number of archives to keep; older ones are pruned after each run.</summary>
@@ -100,6 +138,71 @@ public sealed class ServerDefinition
         string.IsNullOrWhiteSpace(BackupSourceFolder) ? ResolveWorkingDirectory() : BackupSourceFolder;
 
     /// <summary>
+    /// Shapes the update script as a definition the normal launch path understands, so an
+    /// update .bat is quoted, environment-injected and job-object-contained exactly like a
+    /// server script rather than through a second, less tested code path.
+    /// </summary>
+    public ServerDefinition CreateUpdateDefinition() => new()
+    {
+        Id = Id,
+        Name = Name + " (update)",
+        ScriptPath = UpdateScriptPath,
+        Arguments = UpdateArguments,
+
+        // The update runs where the server runs; that is what a mod updater's relative
+        // paths are written against.
+        WorkingDirectory = ResolveWorkingDirectory(),
+        EnvironmentVariables = new Dictionary<string, string>(EnvironmentVariables)
+    };
+
+    /// <summary>
+    /// Moves the old single daily restart and backup times into <see cref="Schedule"/>.
+    /// Idempotent, so running it on every load is safe.
+    /// </summary>
+    /// <returns>True if anything changed and the file should be rewritten.</returns>
+    public bool MigrateLegacySchedules()
+    {
+        var changed = false;
+
+        if (ScheduledTask.IsValidTime(ScheduledRestartTime))
+        {
+            Schedule.Add(new ScheduledTask
+            {
+                Action = ScheduledAction.Restart,
+                Time = ScheduledRestartTime.Trim(),
+                Days = ScheduleDays.EveryDay
+            });
+
+            ScheduledRestartTime = string.Empty;
+            changed = true;
+        }
+
+        if (ScheduledTask.IsValidTime(BackupScheduleTime))
+        {
+            Schedule.Add(new ScheduledTask
+            {
+                Action = ScheduledAction.Backup,
+                Time = BackupScheduleTime.Trim(),
+                Days = ScheduleDays.EveryDay
+            });
+
+            BackupScheduleTime = string.Empty;
+            changed = true;
+        }
+
+        // A time that was never valid cannot have been firing, so discarding it loses
+        // nothing and stops it being carried forward forever.
+        if (!string.IsNullOrWhiteSpace(ScheduledRestartTime) || !string.IsNullOrWhiteSpace(BackupScheduleTime))
+        {
+            ScheduledRestartTime = string.Empty;
+            BackupScheduleTime = string.Empty;
+            changed = true;
+        }
+
+        return changed;
+    }
+
+    /// <summary>
     /// Copies the definition for editing. The environment dictionary is duplicated as
     /// well, so cancelling an edit cannot leave mutations behind on the live definition.
     /// </summary>
@@ -108,6 +211,11 @@ public sealed class ServerDefinition
         var copy = (ServerDefinition)MemberwiseClone();
         copy.EnvironmentVariables = new Dictionary<string, string>(EnvironmentVariables);
         copy.CleanExitCodes = new List<int>(CleanExitCodes);
+
+        // Each task is cloned too, not just the list: editing a schedule entry on a copy
+        // must not reach through into the live definition.
+        copy.Schedule = Schedule.Select(t => t.Clone()).ToList();
+
         return copy;
     }
 

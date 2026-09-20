@@ -60,6 +60,10 @@
                     <Button Content="⟳  Restart" Style="{StaticResource ToolButton}"
                             Command="{Binding RestartCommand}"
                             IsEnabled="{Binding SelectedServer.CanStop, FallbackValue=False}" />
+                    <Button Content="⭳  Run update" Style="{StaticResource ToolButton}"
+                            Command="{Binding RunUpdateCommand}"
+                            IsEnabled="{Binding SelectedServer.CanRunUpdate, FallbackValue=False}"
+                            ToolTip="Runs this server's update script. A running server is stopped first and started again afterwards." />
                     <Rectangle Width="1" Fill="{StaticResource Border.Subtle}" Margin="6,2,12,2" />
                     <Button Content="Add server" Style="{StaticResource ToolButton}"
                             Command="{Binding AddServerCommand}" />
@@ -515,6 +519,10 @@
                                             <views:Sparkline Values="{Binding CpuHistory}" Maximum="100"
                                                              Stroke="{StaticResource Accent.Hover}" />
                                         </Border>
+
+                                        <TextBlock Text="{Binding ScheduleSummary}" Style="{StaticResource Hint}"
+                                                   Margin="0,8,0,0" TextTrimming="CharacterEllipsis"
+                                                   ToolTip="{Binding ScheduleSummary}" />
 
                                         <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
                                             <Button Content="Start" Style="{StaticResource PrimaryButton}"

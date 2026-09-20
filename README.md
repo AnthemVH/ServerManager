@@ -43,7 +43,14 @@ under Monitoring.
 server, archives, and restarts it, which is always restorable at the cost of a short
 outage. *Live* mode archives while running and skips files the server holds locked.
 
-**Scheduling** — a daily restart time and a daily backup time per server.
+**Scheduling** — any number of timed entries per server, each choosing what happens
+(start, stop, restart, run the update script, back up), at what time, and on which days.
+Twice a week is one entry with two days ticked.
+
+**Update scripts** — a second script per server that updates the game or its mods. Run it
+from the toolbar, on a schedule, or before every start. If the server is up it is stopped
+first, because a mod updater cannot overwrite files the server holds open, and started
+again afterwards whether or not the update worked.
 
 **Tray resident** — closing the window hides to the tray and servers keep running.
 Schedules keep firing while hidden. Launching ServerManager again brings the running
@@ -51,9 +58,9 @@ copy's window back rather than reporting that it is already running.
 
 **Self-updating** — checks GitHub for new releases and installs them on your approval.
 
-**Phone control** — an Android app to view your servers, start and stop them, read their
-consoles and send commands, from a browser or an Android app. Off unless you turn it on,
-and it publishes to the internet only over TLS.
+**Browser interface** — a local web page to view your servers, start and stop them, run
+their update scripts, read their consoles and send commands. Off unless you turn it on,
+and served on this machine only.
 
 ---
 
@@ -114,6 +121,8 @@ The settings that matter most:
 | **Stop command** | Written to the server's console for a clean shutdown — `stop` for Minecraft, `quit` for many source engine servers. Leave empty if the server does not read commands; it is terminated after a short grace period instead. |
 | **Restart policy** | *Never*, *On crash* (non-zero exit only), or *Always*. |
 | **Clean exit codes** | Extra exit codes that mean "stopped", not "crashed". Closing a server's own window is already recognised, so doing that never triggers a restart. |
+| **Update script** | A second script that updates the game or its mods. Never runs on its own — only from the toolbar, from a schedule entry, or before every start if you ask for that. |
+| **Schedule** | Timed entries: what to do, at what time, on which days. |
 | **Environment variables** | One `KEY=VALUE` per line, e.g. `JAVA_OPTS=-Xmx4G`. |
 | **Working directory** | Leave empty to run from the script's own folder, which is what most server scripts expect. |
 
@@ -190,9 +199,9 @@ configured**, and deliberately has no way to create one or change a script path 
 launches arbitrary scripts, so an endpoint that could set one would turn a stolen token
 into remote code execution rather than just an unwanted restart.
 
-There is a browser interface and an Android app. Both use the same API, the same pairing,
-and the same revocation, so most people will only want the browser one: it needs nothing
-installed on the device.
+The browser interface is the one to use: it needs nothing installed. The Android app
+exists and uses the same API, but it cannot reach a loopback-only listener without a VPN
+in front of it.
 
 ### On the machine itself
 
@@ -200,44 +209,31 @@ With remote access on, **Settings → Remote access → Open in browser** opens 
 tray menu has **Open browser interface** for when the window is hidden. Both go to
 `http://127.0.0.1:8787/`, which only that machine can reach.
 
-### Publishing it to the internet
+### It is local only, on purpose
 
-To reach it from anywhere, tick **Publish to the network** and point a domain at the
-machine with the port forwarded.
+The listener binds `127.0.0.1` and nothing else. There is no setting that changes that,
+and a test fails if one is ever added.
 
-This requires a TLS certificate and refuses to start without one. That is not caution for
-its own sake: your device token is sent with every request, and over plain HTTP anyone on
-the path would be able to read it and then control your servers.
+So there is no port to forward, no certificate to obtain or keep renewed, and no
+internet-facing surface to get wrong on a box whose whole job is running game scripts. To
+reach it from elsewhere, put something you already trust in front of it — a VPN such as
+[Tailscale](https://tailscale.com/), or a reverse proxy that terminates TLS and forwards
+to the loopback port.
 
-Two ways to supply one, neither of which puts a password in a config file:
+Device tokens and throttling still apply, because loopback is not a boundary between
+programs on the same machine and this API starts processes:
 
-| Setting | Use |
-|---------|-----|
-| **Certificate thumbprint** | A certificate already installed on the machine. Simplest on Windows — a tool like [win-acme](https://www.win-acme.com/) obtains a Let's Encrypt certificate, installs it, and renews it, and ServerManager just names it. |
-| **.pfx path** | A certificate file. If it has a password, put that in a `SERVERMANAGER_CERT_PASSWORD` environment variable. |
-
-Then set **Public address** to your domain, for example `https://servers.example.com`, so
-a device that pairs knows where to connect.
-
-**Be clear-eyed about what this means.** The port will be found and probed within hours of
-opening it. From then on the only thing between a stranger and a service that starts
-processes on your machine is a device token, so:
-
-- Tokens are 256 bits of randomness — not guessable in any practical sense.
+- Tokens are 256 bits of randomness, stored only as a SHA-256 hash.
 - Ten failed attempts from one address blocks that address for ten minutes. It is counted
   per address, because a global counter would let anyone lock *you* out by failing enough
   times.
 - Every remote action is recorded in an audit log and shown in the desktop console.
 - Revoke any device from Settings and it stops working immediately.
 
-If you would rather not expose it at all, leave publishing off and put a VPN such as
-[Tailscale](https://tailscale.com/) or a reverse proxy in front of the loopback port
-instead.
-
 ### Pairing
 
 Press **Pair a device** on the desktop. It shows a QR code and an eight-character code.
-Open your public address on the phone, or the APK, and enter that code.
+Open `http://127.0.0.1:8787/` and enter that code.
 
 The code works once, expires in five minutes, and exists only while the pairing dialog is
 open — so a QR left on screen or caught in a screenshot cannot be used later.

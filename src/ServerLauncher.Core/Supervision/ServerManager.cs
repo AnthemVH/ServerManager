@@ -1,5 +1,4 @@
 using System.Collections.Concurrent;
-using System.Globalization;
 using System.Runtime.Versioning;
 using ServerLauncher.Core.Backup;
 using ServerLauncher.Core.Models;
@@ -23,9 +22,11 @@ public sealed class ServerManager : IDisposable
     private readonly List<ServerInstance> _instances = new();
     private readonly object _instancesGate = new();
 
-    // Tracks the last date each scheduled action fired, so a schedule runs once a day
-    // even though the timer ticks many times within the matching minute.
-    private readonly ConcurrentDictionary<(Guid Id, string Kind), DateOnly> _lastFired = new();
+    // Tracks the last date each scheduled task fired, so a task runs once a day even
+    // though the timer ticks twice within the minute its time matches. Keyed by task id
+    // rather than by server and action, so two tasks doing the same thing at different
+    // times do not suppress one another.
+    private readonly ConcurrentDictionary<Guid, DateOnly> _lastFired = new();
 
     private const int AppHealthHistoryLength = 60;
 
@@ -62,6 +63,9 @@ public sealed class ServerManager : IDisposable
     /// <summary>Raised when a scheduled or manual backup completes.</summary>
     public event Action<ServerInstance, BackupResult>? BackupCompleted;
 
+    /// <summary>Raised when a server's update script starts or finishes.</summary>
+    public event Action<ServerInstance, bool>? ServerUpdatingChanged;
+
     /// <summary>Raised after each reading of the launcher's own resource use.</summary>
     public event Action<AppHealthSample>? AppHealthSampled;
 
@@ -94,9 +98,21 @@ public sealed class ServerManager : IDisposable
     /// <summary>Loads saved servers, starts the timers, and auto-starts what is configured to.</summary>
     public async Task InitialiseAsync(CancellationToken cancellationToken = default)
     {
+        var migrated = false;
+
         foreach (var definition in _store.LoadServers())
         {
+            // Old files hold a single daily restart time and a single daily backup time.
+            // Moving them into the schedule list here means everything downstream has one
+            // place to look, and an existing server keeps firing at the time it always did.
+            migrated |= definition.MigrateLegacySchedules();
+
             AttachInstance(new ServerInstance(definition, Settings));
+        }
+
+        if (migrated)
+        {
+            Persist();
         }
 
         ServersChanged?.Invoke();
@@ -175,6 +191,18 @@ public sealed class ServerManager : IDisposable
             : RunBackupAsync(instance, cancellationToken);
     }
 
+    /// <summary>
+    /// Runs a server's update script. Stops and restarts the server around it if it is
+    /// running — see <see cref="ServerInstance.RunUpdateAsync"/>.
+    /// </summary>
+    public Task<bool> RunUpdateAsync(Guid id, CancellationToken cancellationToken = default)
+    {
+        var instance = Find(id);
+        return instance is null
+            ? Task.FromResult(false)
+            : instance.RunUpdateAsync(cancellationToken);
+    }
+
     private async Task<BackupResult> RunBackupAsync(ServerInstance instance, CancellationToken cancellationToken)
     {
         var result = await _backupService.RunAsync(instance, cancellationToken).ConfigureAwait(false);
@@ -211,6 +239,7 @@ public sealed class ServerManager : IDisposable
         instance.StateChanged += OnStateChanged;
         instance.LineAppended += OnLineAppended;
         instance.ResourceSampled += OnResourceSampled;
+        instance.UpdatingChanged += OnUpdatingChanged;
 
         lock (_instancesGate)
         {
@@ -223,6 +252,7 @@ public sealed class ServerManager : IDisposable
         instance.StateChanged -= OnStateChanged;
         instance.LineAppended -= OnLineAppended;
         instance.ResourceSampled -= OnResourceSampled;
+        instance.UpdatingChanged -= OnUpdatingChanged;
     }
 
     private void OnStateChanged(ServerInstance instance, ServerState state) =>
@@ -230,6 +260,9 @@ public sealed class ServerManager : IDisposable
 
     private void OnLineAppended(ServerInstance instance, LogLine line) =>
         ServerLineAppended?.Invoke(instance, line);
+
+    private void OnUpdatingChanged(ServerInstance instance, bool updating) =>
+        ServerUpdatingChanged?.Invoke(instance, updating);
 
     private void OnResourceSampled(ServerInstance instance, ResourceSample sample) =>
         ServerResourceSampled?.Invoke(instance, sample);
@@ -282,61 +315,86 @@ public sealed class ServerManager : IDisposable
     {
         var now = DateTime.Now;
         var today = DateOnly.FromDateTime(now);
-        // Invariant: ":" in a custom format string is the culture's time separator,
-        // so a locale using "." would silently change what a saved schedule means.
-        var currentTime = now.ToString("HH:mm", CultureInfo.InvariantCulture);
 
         foreach (var instance in Instances)
         {
-            var definition = instance.Definition;
-
-            if (ShouldFire(definition.Id, "restart", definition.ScheduledRestartTime, currentTime, today)
-                && instance.State == ServerState.Running)
+            foreach (var task in instance.Definition.Schedule)
             {
-                _ = Task.Run(async () =>
+                if (!task.IsDue(now) || !ClaimForToday(task.Id, today))
                 {
-                    try
-                    {
-                        await instance.RestartAsync().ConfigureAwait(false);
-                    }
-                    catch (Exception)
-                    {
-                        // Recorded in the server console log.
-                    }
-                });
-            }
+                    continue;
+                }
 
-            if (definition.BackupEnabled
-                && ShouldFire(definition.Id, "backup", definition.BackupScheduleTime, currentTime, today))
-            {
-                _ = Task.Run(async () =>
-                {
-                    try
-                    {
-                        await RunBackupAsync(instance, CancellationToken.None).ConfigureAwait(false);
-                    }
-                    catch (Exception)
-                    {
-                    }
-                });
+                RunScheduledTask(instance, task);
             }
         }
     }
 
-    private bool ShouldFire(Guid id, string kind, string scheduledTime, string currentTime, DateOnly today)
+    /// <summary>
+    /// Dispatches one due task. Each runs detached: a backup or an update takes minutes,
+    /// and the schedule tick must not be sitting inside one when the next minute arrives.
+    /// </summary>
+    private void RunScheduledTask(ServerInstance instance, ScheduledTask task)
     {
-        if (string.IsNullOrWhiteSpace(scheduledTime) || scheduledTime != currentTime)
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                switch (task.Action)
+                {
+                    case ScheduledAction.Start:
+                        // Starting an already-running server is a no-op inside the
+                        // instance, so this needs no state check of its own.
+                        await instance.StartAsync().ConfigureAwait(false);
+                        break;
+
+                    case ScheduledAction.Stop:
+                        await instance.StopAsync().ConfigureAwait(false);
+                        break;
+
+                    case ScheduledAction.Restart:
+                        // A stopped server is started rather than restarted: a scheduled
+                        // restart of something that crashed overnight should bring it back.
+                        if (instance.State == ServerState.Running)
+                        {
+                            await instance.RestartAsync().ConfigureAwait(false);
+                        }
+                        else
+                        {
+                            await instance.StartAsync().ConfigureAwait(false);
+                        }
+
+                        break;
+
+                    case ScheduledAction.RunUpdate:
+                        await instance.RunUpdateAsync().ConfigureAwait(false);
+                        break;
+
+                    case ScheduledAction.Backup:
+                        await RunBackupAsync(instance, CancellationToken.None).ConfigureAwait(false);
+                        break;
+                }
+            }
+            catch (Exception)
+            {
+                // Recorded in that server's console log; a failed scheduled action must
+                // never take the schedule timer down with it.
+            }
+        });
+    }
+
+    /// <summary>
+    /// Marks a task as fired today, returning false if it already had been. The timer
+    /// ticks every 30 seconds, so a task's minute comes round twice.
+    /// </summary>
+    private bool ClaimForToday(Guid taskId, DateOnly today)
+    {
+        if (_lastFired.TryGetValue(taskId, out var lastDate) && lastDate == today)
         {
             return false;
         }
 
-        var key = (id, kind);
-        if (_lastFired.TryGetValue(key, out var lastDate) && lastDate == today)
-        {
-            return false;
-        }
-
-        _lastFired[key] = today;
+        _lastFired[taskId] = today;
         return true;
     }
 

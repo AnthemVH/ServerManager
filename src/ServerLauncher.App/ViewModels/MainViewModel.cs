@@ -412,6 +412,54 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     }
 
     [RelayCommand]
+    private async Task RunUpdateAsync(ServerViewModel? server)
+    {
+        server ??= SelectedServer;
+        if (server is null)
+        {
+            return;
+        }
+
+        if (!server.Definition.HasUpdateScript)
+        {
+            StatusMessage = "Set an update script in this server's settings first.";
+            return;
+        }
+
+        if (server.IsUpdating)
+        {
+            StatusMessage = $"{server.Name} is already updating.";
+            return;
+        }
+
+        // Said plainly up front, because this takes a running server down for as long as
+        // the update takes and the user should not discover that from the console.
+        if (server.IsRunning)
+        {
+            var choice = MessageBox.Show(
+                $"Updating {server.Name} will stop it, run its update script, then start it "
+                + "again.\n\nThe server has to be down while its files are replaced.\n\n"
+                + "Update now?",
+                "Run update",
+                MessageBoxButton.OKCancel,
+                MessageBoxImage.Question);
+
+            if (choice != MessageBoxResult.OK)
+            {
+                return;
+            }
+        }
+
+        StatusMessage = $"Updating {server.Name}…";
+
+        var succeeded = await _manager.RunUpdateAsync(server.Id);
+
+        StatusMessage = succeeded
+            ? $"{server.Name} updated."
+            : $"{server.Name} could not be updated — see its console.";
+    }
+
+    [RelayCommand]
     private void OpenServerFolder(ServerViewModel? server)
     {
         server ??= SelectedServer;

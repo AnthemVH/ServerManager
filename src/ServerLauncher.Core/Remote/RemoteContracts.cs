@@ -28,7 +28,10 @@ public sealed record ServerSummary(
     string Uptime,
     bool CanStart,
     bool CanStop,
-    bool IsLauncherDetached);
+    bool IsLauncherDetached,
+    bool CanRunUpdate,
+    bool IsUpdating,
+    string Schedule);
 
 public sealed record ConsoleLineDto(string Timestamp, string Stream, string Text);
 

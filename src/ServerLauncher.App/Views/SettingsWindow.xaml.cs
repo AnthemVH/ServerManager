@@ -36,11 +36,7 @@ public partial class SettingsWindow : Window
             RemoteAccess = new RemoteAccessSettings
             {
                 Enabled = settings.RemoteAccess.Enabled,
-                PublishDirectly = settings.RemoteAccess.PublishDirectly,
-                Port = settings.RemoteAccess.Port,
-                PublicAddress = settings.RemoteAccess.PublicAddress,
-                CertificateThumbprint = settings.RemoteAccess.CertificateThumbprint,
-                CertificatePath = settings.RemoteAccess.CertificatePath
+                Port = settings.RemoteAccess.Port
             }
         };
 
@@ -64,11 +60,6 @@ public partial class SettingsWindow : Window
 
         RemoteEnabledBox.IsChecked = Settings.RemoteAccess.Enabled;
         RemotePortBox.Text = Settings.RemoteAccess.Port.ToString();
-        RemotePublicAddressBox.Text = Settings.RemoteAccess.PublicAddress;
-        RemotePublishBox.IsChecked = Settings.RemoteAccess.PublishDirectly;
-        CertThumbprintBox.Text = Settings.RemoteAccess.CertificateThumbprint;
-        CertPathBox.Text = Settings.RemoteAccess.CertificatePath;
-        CertStatusText.Text = CertificateResolver.Describe(Settings.RemoteAccess);
 
         DeviceList.ItemsSource = _devices;
         RefreshRemoteStatus();
@@ -228,10 +219,6 @@ public partial class SettingsWindow : Window
 
         Settings.RemoteAccess.Enabled = RemoteEnabledBox.IsChecked == true;
         Settings.RemoteAccess.Port = ParseInt(RemotePortBox.Text, 8787, min: 1);
-        Settings.RemoteAccess.PublicAddress = RemotePublicAddressBox.Text.Trim();
-        Settings.RemoteAccess.PublishDirectly = RemotePublishBox.IsChecked == true;
-        Settings.RemoteAccess.CertificateThumbprint = CertThumbprintBox.Text.Trim();
-        Settings.RemoteAccess.CertificatePath = CertPathBox.Text.Trim();
 
         Settings.StartWithWindows = StartWithWindowsBox.IsChecked == true;
         if (!StartupRegistration.SetEnabled(Settings.StartWithWindows, Settings.StartMinimised))

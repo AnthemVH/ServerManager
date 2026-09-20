@@ -459,7 +459,26 @@ public sealed class UiSmokeTests : IDisposable
             {
                 Name = "Editing",
                 ScriptPath = @"C:\servers\start.bat",
-                StopCommand = "stop"
+                StopCommand = "stop",
+                UpdateScriptPath = @"C:\servers\update.bat",
+
+                // With entries present the schedule template actually renders, so a
+                // broken binding inside it is caught rather than skipped.
+                Schedule =
+                {
+                    new ScheduledTask
+                    {
+                        Action = ScheduledAction.Restart,
+                        Time = "05:00",
+                        Days = ScheduleDays.Monday | ScheduleDays.Thursday
+                    },
+                    new ScheduledTask
+                    {
+                        Action = ScheduledAction.RunUpdate,
+                        Time = "04:00",
+                        Days = ScheduleDays.Sunday
+                    }
+                }
             };
 
             var window = (ServerEditorWindow)Offscreen(new ServerEditorWindow(definition, isNew: false));
@@ -481,14 +500,25 @@ public sealed class UiSmokeTests : IDisposable
     public void ServerEditor_RoundTripsEveryFieldItEdits()
     {
         // Guards against a field being shown but never written back on save — the kind
-        // of omission that silently discards a user's setting.
+        // of omission that silently discards a user's setting. The editor is driven all
+        // the way through Apply, so a field that loads but never saves fails here.
         WpfHarness.RunOnUi(() =>
         {
+            // Real files, because saving validates that the scripts exist.
+            var folder = Path.Combine(Path.GetTempPath(), "ServerLauncherEditorTests",
+                Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(folder);
+
+            var startScript = Path.Combine(folder, "start.bat");
+            var updateScript = Path.Combine(folder, "update.bat");
+            File.WriteAllText(startScript, "@echo off");
+            File.WriteAllText(updateScript, "@echo off");
+
             var original = new ServerDefinition
             {
                 Name = "Round Trip",
-                ScriptPath = @"C:\servers\start.bat",
-                WorkingDirectory = @"C:\servers",
+                ScriptPath = startScript,
+                WorkingDirectory = folder,
                 Arguments = "-nogui",
                 AutoStartOnLaunch = true,
                 StopCommand = "stop",
@@ -496,15 +526,33 @@ public sealed class UiSmokeTests : IDisposable
                 RestartPolicy = RestartPolicy.Always,
                 MaxConsecutiveRestarts = 7,
                 StableUptimeMinutes = 9,
-                ScheduledRestartTime = "05:30",
+                UpdateScriptPath = updateScript,
+                UpdateArguments = "+app_update 233780 validate",
+                UpdateTimeoutMinutes = 45,
+                RunUpdateBeforeStart = true,
                 BackupEnabled = true,
-                BackupSourceFolder = @"C:\servers\world",
+                BackupSourceFolder = folder,
                 BackupDestinationFolder = @"D:\backups",
                 BackupMode = BackupMode.Live,
-                BackupScheduleTime = "04:15",
                 BackupRetentionCount = 12,
                 EnvironmentVariables = { ["JAVA_OPTS"] = "-Xmx4G", ["WORLD"] = "overworld" },
-                CleanExitCodes = { 7, 42 }
+                CleanExitCodes = { 7, 42 },
+                Schedule =
+                {
+                    new ScheduledTask
+                    {
+                        Action = ScheduledAction.Restart,
+                        Time = "05:30",
+                        Days = ScheduleDays.Monday | ScheduleDays.Thursday
+                    },
+                    new ScheduledTask
+                    {
+                        Action = ScheduledAction.Backup,
+                        Time = "04:15",
+                        Days = ScheduleDays.EveryDay,
+                        Enabled = false
+                    }
+                }
             };
 
             var window = (ServerEditorWindow)Offscreen(new ServerEditorWindow(original.Clone(), isNew: false));
@@ -512,6 +560,8 @@ public sealed class UiSmokeTests : IDisposable
             {
                 window.Show();
                 WpfHarness.Pump(window);
+
+                window.Apply(out var error).Should().BeTrue(error);
 
                 var loaded = window.Definition;
 
@@ -525,15 +575,23 @@ public sealed class UiSmokeTests : IDisposable
                 loaded.RestartPolicy.Should().Be(original.RestartPolicy);
                 loaded.MaxConsecutiveRestarts.Should().Be(original.MaxConsecutiveRestarts);
                 loaded.StableUptimeMinutes.Should().Be(original.StableUptimeMinutes);
-                loaded.ScheduledRestartTime.Should().Be(original.ScheduledRestartTime);
+                loaded.UpdateScriptPath.Should().Be(original.UpdateScriptPath);
+                loaded.UpdateArguments.Should().Be(original.UpdateArguments);
+                loaded.UpdateTimeoutMinutes.Should().Be(original.UpdateTimeoutMinutes);
+                loaded.RunUpdateBeforeStart.Should().Be(original.RunUpdateBeforeStart);
                 loaded.BackupEnabled.Should().Be(original.BackupEnabled);
                 loaded.BackupSourceFolder.Should().Be(original.BackupSourceFolder);
                 loaded.BackupDestinationFolder.Should().Be(original.BackupDestinationFolder);
                 loaded.BackupMode.Should().Be(original.BackupMode);
-                loaded.BackupScheduleTime.Should().Be(original.BackupScheduleTime);
                 loaded.BackupRetentionCount.Should().Be(original.BackupRetentionCount);
                 loaded.EnvironmentVariables.Should().BeEquivalentTo(original.EnvironmentVariables);
                 loaded.CleanExitCodes.Should().BeEquivalentTo(original.CleanExitCodes);
+
+                loaded.Schedule.Should().BeEquivalentTo(original.Schedule,
+                    "every schedule entry must survive a save, including its days and its enabled flag");
+
+                loaded.Schedule.Select(t => t.Id).Should().BeEquivalentTo(original.Schedule.Select(t => t.Id),
+                    "task ids carry the once-per-day fire guard, so saving must not renumber them");
             }
             finally
             {
@@ -556,7 +614,7 @@ public sealed class UiSmokeTests : IDisposable
             var pairing = new PairingService(devices);
 
             var settings = new AppSettings();
-            settings.RemoteAccess.PublicAddress = "https://servers.example.com";
+            settings.RemoteAccess.Port = 8787;
 
             var window = (PairingWindow)Offscreen(new PairingWindow(pairing, settings));
             try
