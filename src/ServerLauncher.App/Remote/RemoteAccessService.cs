@@ -14,6 +14,9 @@ public sealed class RemoteAccessService : IAsyncDisposable
 {
     private readonly RemoteApiServer _server;
 
+    /// <summary>The settings the running listener was started with, or null when stopped.</summary>
+    private RemoteAccessSettings? _applied;
+
     public RemoteAccessService(ServerManager manager)
     {
         Devices = new DeviceStore();
@@ -34,6 +37,14 @@ public sealed class RemoteAccessService : IAsyncDisposable
     /// <summary>Local address the API is bound to, or null when stopped.</summary>
     public string? ListeningOn => _server.ListeningOn;
 
+    /// <summary>
+    /// The address to open a browser at on this machine. Not the same as
+    /// <see cref="ListeningOn"/>, which reports the socket that was bound — a browser
+    /// cannot open "0.0.0.0", and loopback reaches the listener whatever it bound.
+    /// </summary>
+    public string? BrowsableAddress =>
+        _server.IsRunning ? _applied?.LocalAddress : null;
+
     /// <summary>Why the last attempt to start failed, for display in Settings.</summary>
     public string? LastError { get; private set; }
 
@@ -50,12 +61,17 @@ public sealed class RemoteAccessService : IAsyncDisposable
         if (!settings.RemoteAccess.Enabled)
         {
             await _server.StopAsync().ConfigureAwait(false);
+            _applied = null;
             return true;
         }
 
         try
         {
             await _server.StartAsync(settings.RemoteAccess).ConfigureAwait(false);
+
+            // Held as a copy: the settings object the dialog hands over keeps being
+            // edited, and this has to describe the listener that is actually running.
+            _applied = settings.RemoteAccess.Clone();
             return true;
         }
         catch (Exception ex)
@@ -63,6 +79,7 @@ public sealed class RemoteAccessService : IAsyncDisposable
             // A misconfigured listener must not take the app down; Settings shows why.
             LastError = ex.Message;
             await _server.StopAsync().ConfigureAwait(false);
+            _applied = null;
             return false;
         }
     }

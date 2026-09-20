@@ -297,19 +297,86 @@ public sealed class PairingServiceTests : IDisposable
 }
 
 /// <summary>
-/// Covers the rules that keep the API where it belongs. The browser interface is served
-/// on this machine only, and this pins that it cannot quietly become something else.
+/// Covers where the browser interface listens. Binding beyond loopback is what makes a
+/// forwarded port reach it, and also what turns a device token into the only thing
+/// standing between a stranger and a service that starts processes — so the rules about
+/// which address is bound, and about knowing when it is unencrypted, are worth pinning.
 /// </summary>
-public class ListenerRulesTests
+public class HostingRulesTests
 {
     [Fact]
-    public void ALoopbackListenerNeedsNoConfiguration()
+    public void TheDefaultIsThisMachineOnly()
     {
-        // Nothing to obtain, nothing to renew, nothing to forward: the default is the
-        // whole design, so turning it on must never fail for want of a setting.
+        // Turning the feature on must never, by itself, put it on the network.
+        var settings = new RemoteAccessSettings { Enabled = true };
+
+        settings.BindAddress.Should().Be("127.0.0.1");
+        settings.IsLocalOnly.Should().BeTrue();
+    }
+
+    [Fact]
+    public void ALoopbackListenerNeedsNoOtherConfiguration()
+    {
         var act = () => RemoteApiServer.Validate(new RemoteAccessSettings { Enabled = true });
 
         act.Should().NotThrow();
+    }
+
+    [Fact]
+    public void BindingEveryInterfaceIsAllowed()
+    {
+        // This is what port forwarding needs. It is the user's machine and their call.
+        var settings = new RemoteAccessSettings
+        {
+            Enabled = true,
+            BindAddress = RemoteAccessSettings.AllInterfacesAddress
+        };
+
+        var act = () => RemoteApiServer.Validate(settings);
+
+        act.Should().NotThrow();
+        settings.IsLocalOnly.Should().BeFalse();
+    }
+
+    [Theory]
+    [InlineData("0.0.0.0")]
+    [InlineData("any")]
+    [InlineData("ALL")]
+    [InlineData("*")]
+    [InlineData("192.168.1.50")]
+    public void EveryWayOfSayingNotLocalIsUnderstood(string address)
+    {
+        var settings = new RemoteAccessSettings { BindAddress = address };
+
+        settings.TryResolveBindAddress(out _, out var error).Should().BeTrue(error);
+        settings.IsLocalOnly.Should().BeFalse();
+    }
+
+    [Theory]
+    [InlineData("127.0.0.1")]
+    [InlineData("localhost")]
+    [InlineData("LOCALHOST")]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void EveryWayOfSayingLocalIsUnderstood(string address)
+    {
+        // The empty cases matter: a settings.json written before this setting existed has
+        // no bind address at all, and must keep behaving as local only.
+        new RemoteAccessSettings { BindAddress = address }.IsLocalOnly.Should().BeTrue();
+    }
+
+    [Fact]
+    public void AnAddressThatIsNotAnAddressIsRejectedRatherThanIgnored()
+    {
+        // Falling back to loopback silently would leave someone wondering why their
+        // forwarded port reaches nothing.
+        var settings = new RemoteAccessSettings { BindAddress = "my-server.example.com" };
+
+        settings.TryResolveBindAddress(out _, out var error).Should().BeFalse();
+        error.Should().Contain("not an IP address");
+
+        var act = () => RemoteApiServer.Validate(settings);
+        act.Should().Throw<InvalidOperationException>().WithMessage("*not an IP address*");
     }
 
     [Theory]
@@ -324,37 +391,89 @@ public class ListenerRulesTests
     }
 
     [Fact]
-    public void TheAddressOfferedIsAlwaysLoopback()
+    public void ACertificateTurnsTheSiteIntoHttps()
     {
-        // A pairing dialog or a browser button handing out anything else would be
-        // advertising an address that does not answer.
-        new RemoteAccessSettings { Port = 9000 }.LocalAddress.Should().Be("http://127.0.0.1:9000");
+        new RemoteAccessSettings().Scheme.Should().Be("http");
+
+        new RemoteAccessSettings { CertificateThumbprint = "AABB" }.Scheme.Should().Be("https");
+        new RemoteAccessSettings { CertificatePath = @"C:\cert.pfx" }.Scheme.Should().Be("https");
     }
 
     [Fact]
-    public void ThereIsNoSettingThatWouldPublishToTheNetwork()
+    public void BeingOnTheNetworkWithoutTlsIsSomethingTheAppCanTell()
     {
-        // The listener binds IPAddress.Loopback unconditionally. If a later change adds a
-        // way to configure the bind address, this fails and the decision gets made
-        // deliberately rather than by accident — it would put a process-starting API on
-        // the network.
-        var configurable = typeof(RemoteAccessSettings)
-            .GetProperties()
-            .Where(p => p.CanWrite)
-            .Select(p => p.Name)
-            .ToList();
+        // The settings screen shows a warning off the back of this, so it has to be
+        // right in both directions.
+        new RemoteAccessSettings
+        {
+            BindAddress = RemoteAccessSettings.AllInterfacesAddress
+        }.IsUnencryptedOnTheNetwork.Should().BeTrue();
 
-        configurable.Should().BeEquivalentTo(new[] { nameof(RemoteAccessSettings.Enabled), nameof(RemoteAccessSettings.Port) });
+        new RemoteAccessSettings
+        {
+            BindAddress = RemoteAccessSettings.AllInterfacesAddress,
+            CertificateThumbprint = "AABB"
+        }.IsUnencryptedOnTheNetwork.Should().BeFalse("TLS is configured");
+
+        new RemoteAccessSettings().IsUnencryptedOnTheNetwork
+            .Should().BeFalse("nothing but this machine can reach loopback");
     }
 
     [Fact]
-    public void TokensStillGuardTheApi()
+    public void TheAddressToOpenOnThisMachineIsAlwaysLoopback()
     {
-        // Loopback is not a boundary between programs on the same machine, and this API
-        // starts processes, so the token layer is not redundant just because the listener
-        // is local.
+        // Whatever interface was bound, a browser here reaches it on 127.0.0.1 — and it
+        // certainly cannot open "0.0.0.0".
+        var settings = new RemoteAccessSettings
+        {
+            BindAddress = RemoteAccessSettings.AllInterfacesAddress,
+            Port = 9000
+        };
+
+        settings.LocalAddress.Should().Be("http://127.0.0.1:9000");
+    }
+
+    [Fact]
+    public void APairingDeviceIsGivenThePublicAddressWhenThereIsOne()
+    {
+        var settings = new RemoteAccessSettings
+        {
+            BindAddress = RemoteAccessSettings.AllInterfacesAddress,
+            PublicAddress = "https://servers.example.com/"
+        };
+
+        // Trailing slash trimmed, since the client appends its own paths.
+        settings.ResolvePairingAddress().Should().Be("https://servers.example.com");
+    }
+
+    [Fact]
+    public void WithoutAPublicAddressPairingFallsBackToSomethingThatWorksHere()
+    {
+        new RemoteAccessSettings { Port = 8787 }.ResolvePairingAddress()
+            .Should().Be("http://127.0.0.1:8787");
+    }
+
+    [Fact]
+    public void EditingACopyOfTheSettingsDoesNotTouchTheLiveOnes()
+    {
+        // The settings dialog edits a clone so that cancelling changes nothing.
+        var live = new RemoteAccessSettings { Port = 8787 };
+
+        var copy = live.Clone();
+        copy.Port = 9999;
+        copy.BindAddress = RemoteAccessSettings.AllInterfacesAddress;
+
+        live.Port.Should().Be(8787);
+        live.IsLocalOnly.Should().BeTrue();
+    }
+
+    [Fact]
+    public void TokensStillGuardTheApiWhereverItListens()
+    {
+        // Loopback is not a boundary between programs on one machine, and a bound
+        // interface is not a boundary at all. The token layer is never redundant.
         var store = new DeviceStore(Path.Combine(
-            Path.GetTempPath(), "ServerLauncherListenerTests", Guid.NewGuid().ToString("N"), "devices.json"));
+            Path.GetTempPath(), "ServerLauncherHostingTests", Guid.NewGuid().ToString("N"), "devices.json"));
 
         store.Authenticate("anything-at-all").Should().BeNull();
     }

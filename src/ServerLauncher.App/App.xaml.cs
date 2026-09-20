@@ -140,12 +140,12 @@ public partial class App : Application
     }
 
     /// <summary>
-    /// Opens the browser interface. It listens on loopback, so this address is the only
-    /// one that reaches it, and only from this machine.
+    /// Opens the browser interface on this machine. Always the loopback address, which
+    /// reaches the listener whatever interface it bound — a browser cannot open "0.0.0.0".
     /// </summary>
     public void OpenBrowserInterface()
     {
-        if (_remote is null || !_remote.IsRunning || _remote.ListeningOn is not { } url)
+        if (_remote is null || !_remote.IsRunning || _remote.BrowsableAddress is not { } url)
         {
             MessageBox.Show(
                 "Remote access is off, so there is nothing to open. Turn it on in Settings, "

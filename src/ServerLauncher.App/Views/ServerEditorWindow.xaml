@@ -200,7 +200,8 @@
                 <!-- Backups -->
                 <TextBlock Text="Backups" Style="{StaticResource SectionHeading}" />
 
-                <CheckBox x:Name="BackupEnabledBox" Content="Run scheduled backups for this server" />
+                <TextBlock Style="{StaticResource Hint}" Margin="0,0,0,6"
+                           Text="Backups run when a 'Back up' entry in the schedule above says so, or when you press Back up now. There is no separate switch." />
 
                 <TextBlock Text="Folder to back up" Style="{StaticResource Label}" />
                 <Grid>

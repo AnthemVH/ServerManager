@@ -104,8 +104,10 @@ public sealed class ServerDefinition
     public bool HasUpdateScript => !string.IsNullOrWhiteSpace(UpdateScriptPath);
 
     // --- Backups ---
-
-    public bool BackupEnabled { get; set; }
+    //
+    // There is no "backups enabled" flag: a Backup entry in Schedule is what turns them
+    // on, and a second switch that also had to be on was a checkbox that silently did
+    // nothing once schedules replaced the single daily backup time.
 
     /// <summary>Folder to archive. Empty means the working directory.</summary>
     public string BackupSourceFolder { get; set; } = string.Empty;

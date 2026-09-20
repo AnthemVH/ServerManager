@@ -58,9 +58,9 @@ copy's window back rather than reporting that it is already running.
 
 **Self-updating** — checks GitHub for new releases and installs them on your approval.
 
-**Browser interface** — a local web page to view your servers, start and stop them, run
-their update scripts, read their consoles and send commands. Off unless you turn it on,
-and served on this machine only.
+**Browser interface** — a web page to view your servers, start and stop them, run their
+update scripts, read their consoles and send commands. Off unless you turn it on, served
+on this machine by default, and bindable to a forwarded port with optional TLS.
 
 ---
 
@@ -199,30 +199,50 @@ configured**, and deliberately has no way to create one or change a script path 
 launches arbitrary scripts, so an endpoint that could set one would turn a stolen token
 into remote code execution rather than just an unwanted restart.
 
-The browser interface is the one to use: it needs nothing installed. The Android app
-exists and uses the same API, but it cannot reach a loopback-only listener without a VPN
-in front of it.
+The browser interface is the one to use: it needs nothing installed on the device. The
+Android app exists and speaks the same API.
 
-### On the machine itself
+### Hosting it
 
-With remote access on, **Settings → Remote access → Open in browser** opens it, and the
-tray menu has **Open browser interface** for when the window is hidden. Both go to
-`http://127.0.0.1:8787/`, which only that machine can reach.
+Everything is under **Settings → Website**.
 
-### It is local only, on purpose
+| Setting | What it does |
+|---------|--------------|
+| **Listen on** | `127.0.0.1` for this machine only, `0.0.0.0` for every network interface, or the address of one interface. |
+| **Port** | Default 8787. |
+| **Public address** | What people actually type, e.g. `https://servers.example.com`. Shown when pairing — the listener only knows which socket it bound, not how the world reaches it. |
+| **TLS certificate** | Optional. Set one and the site is served over HTTPS instead of HTTP; nothing else changes. |
 
-The listener binds `127.0.0.1` and nothing else. There is no setting that changes that,
-and a test fails if one is ever added.
+**To reach it from outside**, set *Listen on* to `0.0.0.0` and forward your chosen port on
+your router to this machine. ServerManager binds the socket itself, so no administrator
+step and no `netsh` URL reservation is involved — that is why this uses Kestrel rather
+than `HttpListener`, which refuses anything but loopback without one.
 
-So there is no port to forward, no certificate to obtain or keep renewed, and no
-internet-facing surface to get wrong on a box whose whole job is running game scripts. To
-reach it from elsewhere, put something you already trust in front of it — a VPN such as
-[Tailscale](https://tailscale.com/), or a reverse proxy that terminates TLS and forwards
-to the loopback port.
+On the machine itself, **Open in browser** in Settings or in the tray menu always goes to
+`http://127.0.0.1:<port>/`, whatever interface is bound — a browser cannot open `0.0.0.0`.
 
-Device tokens and throttling still apply, because loopback is not a boundary between
-programs on the same machine and this API starts processes:
+### Be clear-eyed about forwarding the port
 
+The moment the port is reachable from the internet it will be found and probed, usually
+within hours. From then on a device token is the only thing between a stranger and a
+service that starts processes on your machine.
+
+**Set a certificate if you forward the port.** Every request carries the device token, and
+over plain HTTP anyone on the path can read it and then control your servers. Two ways to
+supply one, neither of which puts a password in a config file:
+
+| Setting | Use |
+|---------|-----|
+| **Certificate thumbprint** | A certificate already installed on the machine. Simplest on Windows — a tool like [win-acme](https://www.win-acme.com/) obtains a Let's Encrypt certificate, installs it, and renews it, and ServerManager just names it. |
+| **.pfx path** | A certificate file. If it has a password, put that in a `SERVERMANAGER_CERT_PASSWORD` environment variable. |
+
+ServerManager will not stop you serving plain HTTP to the network — it is your machine —
+but Settings shows a warning while that is the case.
+
+What protects you either way:
+
+- The API has **no endpoint that creates or edits a server**, so a stolen token buys
+  control of the servers you already configured and nothing more.
 - Tokens are 256 bits of randomness, stored only as a SHA-256 hash.
 - Ten failed attempts from one address blocks that address for ten minutes. It is counted
   per address, because a global counter would let anyone lock *you* out by failing enough
@@ -230,10 +250,13 @@ programs on the same machine and this API starts processes:
 - Every remote action is recorded in an audit log and shown in the desktop console.
 - Revoke any device from Settings and it stops working immediately.
 
+If you would rather not expose it at all, leave it on `127.0.0.1` and put a VPN such as
+[Tailscale](https://tailscale.com/) or a reverse proxy in front of the loopback port.
+
 ### Pairing
 
 Press **Pair a device** on the desktop. It shows a QR code and an eight-character code.
-Open `http://127.0.0.1:8787/` and enter that code.
+Open the site and enter that code.
 
 The code works once, expires in five minutes, and exists only while the pairing dialog is
 open — so a QR left on screen or caught in a screenshot cannot be used later.

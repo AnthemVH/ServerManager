@@ -33,11 +33,7 @@ public partial class SettingsWindow : Window
             UpdateRepository = settings.UpdateRepository,
             CheckForUpdatesOnStartup = settings.CheckForUpdatesOnStartup,
             StartWithWindows = settings.StartWithWindows,
-            RemoteAccess = new RemoteAccessSettings
-            {
-                Enabled = settings.RemoteAccess.Enabled,
-                Port = settings.RemoteAccess.Port
-            }
+            RemoteAccess = settings.RemoteAccess.Clone()
         };
 
         ConsoleLinesBox.Text = Settings.ConsoleBufferLines.ToString();
@@ -60,6 +56,27 @@ public partial class SettingsWindow : Window
 
         RemoteEnabledBox.IsChecked = Settings.RemoteAccess.Enabled;
         RemotePortBox.Text = Settings.RemoteAccess.Port.ToString();
+        RemotePublicAddressBox.Text = Settings.RemoteAccess.PublicAddress;
+        CertThumbprintBox.Text = Settings.RemoteAccess.CertificateThumbprint;
+        CertPathBox.Text = Settings.RemoteAccess.CertificatePath;
+        CertStatusText.Text = Settings.RemoteAccess.HasCertificate
+            ? CertificateResolver.Describe(Settings.RemoteAccess)
+            : "No certificate set — the site is served over plain HTTP.";
+
+        BindModeBox.ItemsSource = BindModes;
+        BindAddressBox.Text = string.IsNullOrWhiteSpace(Settings.RemoteAccess.BindAddress)
+            ? RemoteAccessSettings.LoopbackAddress
+            : Settings.RemoteAccess.BindAddress;
+
+        BindModeBox.SelectedItem = BindModes.FirstOrDefault(
+            m => string.Equals(m.Address, BindAddressBox.Text.Trim(), StringComparison.OrdinalIgnoreCase))
+            ?? BindModes[^1];
+
+        BindAddressBox.TextChanged += (_, _) => RefreshExposureWarning();
+        CertThumbprintBox.TextChanged += (_, _) => RefreshExposureWarning();
+        CertPathBox.TextChanged += (_, _) => RefreshExposureWarning();
+
+        RefreshExposureWarning();
 
         DeviceList.ItemsSource = _devices;
         RefreshRemoteStatus();
@@ -67,6 +84,82 @@ public partial class SettingsWindow : Window
     }
 
     public AppSettings Settings { get; }
+
+    /// <summary>A choice in the "Listen on" dropdown.</summary>
+    /// <param name="Address">
+    /// The value written to settings, or empty for "a specific address", which leaves the
+    /// text box alone rather than overwriting what the user typed.
+    /// </param>
+    private sealed record BindMode(string Label, string Address)
+    {
+        public override string ToString() => Label;
+    }
+
+    private static readonly BindMode[] BindModes =
+    {
+        new("This machine only (127.0.0.1)", RemoteAccessSettings.LoopbackAddress),
+        new("Every network interface (0.0.0.0)", RemoteAccessSettings.AllInterfacesAddress),
+        new("A specific address…", string.Empty)
+    };
+
+    private void OnBindModeChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (BindModeBox.SelectedItem is not BindMode mode)
+        {
+            return;
+        }
+
+        // The box stays editable in every mode: the presets fill it in, and picking
+        // "a specific address" simply stops overwriting whatever is there.
+        if (mode.Address.Length > 0)
+        {
+            BindAddressBox.Text = mode.Address;
+        }
+
+        RefreshExposureWarning();
+    }
+
+    /// <summary>
+    /// Says plainly when the site is reachable from the network without TLS. Not a block:
+    /// it is the user's machine and their call, but it should never be a surprise.
+    /// </summary>
+    private void RefreshExposureWarning()
+    {
+        if (ExposureWarning is null)
+        {
+            return;
+        }
+
+        var probe = new RemoteAccessSettings
+        {
+            BindAddress = BindAddressBox.Text,
+            CertificateThumbprint = CertThumbprintBox.Text,
+            CertificatePath = CertPathBox.Text
+        };
+
+        if (!probe.TryResolveBindAddress(out _, out var addressError) && addressError.Length > 0)
+        {
+            ExposureWarningText.Text = addressError;
+            ExposureWarning.Visibility = Visibility.Visible;
+            return;
+        }
+
+        if (probe.IsUnencryptedOnTheNetwork)
+        {
+            ExposureWarningText.Text =
+                "This listens on the network with no certificate, so the site is served over "
+                + "plain HTTP. Every request carries a device token, and anyone on the path "
+                + "between a phone and this machine can read it and then control your servers.\n\n"
+                + "Set a certificate above to serve HTTPS instead. If the port is forwarded, it "
+                + "will be found and probed within hours, and from then on a device token is the "
+                + "only thing standing in the way.";
+
+            ExposureWarning.Visibility = Visibility.Visible;
+            return;
+        }
+
+        ExposureWarning.Visibility = Visibility.Collapsed;
+    }
 
     /// <summary>A paired device as shown in the list, with its command permission bound.</summary>
     public sealed class DeviceRow : INotifyPropertyChanged
@@ -148,7 +241,7 @@ public partial class SettingsWindow : Window
         RemoteStatusText.Text = _remote.LastError is { } error
             ? $"Not running: {error}"
             : _remote.IsRunning
-                ? $"Running, listening on {_remote.ListeningOn}"
+                ? $"Running, bound to {_remote.ListeningOn}. On this machine, open {_remote.BrowsableAddress}."
                 : "Not running.";
     }
 
@@ -205,6 +298,23 @@ public partial class SettingsWindow : Window
 
     private void OnSave(object sender, RoutedEventArgs e)
     {
+        // Checked before anything is written. An unparseable address would otherwise fall
+        // back to loopback, and the user would be left wondering why their forwarded port
+        // reaches nothing.
+        var probe = new RemoteAccessSettings { BindAddress = BindAddressBox.Text };
+        if (!probe.TryResolveBindAddress(out _, out var addressError))
+        {
+            RefreshExposureWarning();
+
+            MessageBox.Show(
+                addressError,
+                "Website address",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+
+            return;
+        }
+
         Settings.ConsoleBufferLines = ParseInt(ConsoleLinesBox.Text, 5000, min: 100);
         Settings.LogRetentionDays = ParseInt(LogRetentionBox.Text, 14, min: 1);
         Settings.ResourceSampleIntervalSeconds = ParseInt(SampleIntervalBox.Text, 2, min: 1);
@@ -219,6 +329,10 @@ public partial class SettingsWindow : Window
 
         Settings.RemoteAccess.Enabled = RemoteEnabledBox.IsChecked == true;
         Settings.RemoteAccess.Port = ParseInt(RemotePortBox.Text, 8787, min: 1);
+        Settings.RemoteAccess.BindAddress = BindAddressBox.Text.Trim();
+        Settings.RemoteAccess.PublicAddress = RemotePublicAddressBox.Text.Trim();
+        Settings.RemoteAccess.CertificateThumbprint = CertThumbprintBox.Text.Trim();
+        Settings.RemoteAccess.CertificatePath = CertPathBox.Text.Trim();
 
         Settings.StartWithWindows = StartWithWindowsBox.IsChecked == true;
         if (!StartupRegistration.SetEnabled(Settings.StartWithWindows, Settings.StartMinimised))

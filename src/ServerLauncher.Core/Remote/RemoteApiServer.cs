@@ -16,13 +16,17 @@ namespace ServerLauncher.Core.Remote;
 /// </summary>
 /// <remarks>
 /// <para>
-/// Bound to loopback, always. Only something already running on this machine can reach
-/// it, which is what makes the browser interface safe to leave on: there is no open port,
-/// no certificate to keep renewed and no internet-facing surface to get wrong.
+/// Bound to loopback by default, and to a configured address when the user wants to reach
+/// it from elsewhere. Kestrel rather than HttpListener for exactly that reason:
+/// HttpListener runs on http.sys, which refuses any prefix but loopback without a URL
+/// reservation made by an administrator, and needs a second admin step to attach a
+/// certificate to a port. ServerManager runs unelevated so it can replace its own
+/// executable when updating. Kestrel binds the socket itself and takes a certificate
+/// directly.
 /// </para>
 /// <para>
-/// The device tokens and throttling below still apply. Loopback is not a trust boundary
-/// between programs on the same machine, and this API starts processes.
+/// The device tokens and throttling below apply wherever it is bound. Loopback is not a
+/// trust boundary between programs on the same machine, and this API starts processes.
 /// </para>
 /// <para>
 /// The API can start, stop and inspect servers that already exist. It has no endpoint that
@@ -72,6 +76,16 @@ public sealed class RemoteApiServer : IAsyncDisposable
         {
             throw new InvalidOperationException($"{settings.Port} is not a usable port.");
         }
+
+        if (!settings.TryResolveBindAddress(out _, out var addressError))
+        {
+            throw new InvalidOperationException(addressError);
+        }
+
+        // Deliberately not an error. Serving this over plain HTTP to the network is a bad
+        // idea and the settings screen says so plainly, but it is the user's machine and
+        // their call — refusing would just mean they could not use the feature at all.
+        // A certificate turns it into HTTPS with no other change.
     }
 
     public async Task StartAsync(RemoteAccessSettings settings)
@@ -87,12 +101,17 @@ public sealed class RemoteApiServer : IAsyncDisposable
         var builder = WebApplication.CreateSlimBuilder();
         builder.Logging.ClearProviders();
 
+        settings.TryResolveBindAddress(out var bindAddress, out _);
+
         builder.WebHost.ConfigureKestrel(options =>
         {
-            // IPAddress.Loopback, not IPAddress.Any: binding the wildcard would expose a
-            // process-starting API to the network, and nothing here is meant to leave
-            // this machine.
-            options.Listen(IPAddress.Loopback, settings.Port);
+            options.Listen(bindAddress, settings.Port, listen =>
+            {
+                if (settings.HasCertificate)
+                {
+                    listen.UseHttps(CertificateResolver.Resolve(settings));
+                }
+            });
 
             // Everything here is a small JSON document or one HTML page.
             options.Limits.MaxRequestBodySize = 64 * 1024;
@@ -114,7 +133,10 @@ public sealed class RemoteApiServer : IAsyncDisposable
 
         _app = app;
 
-        ListeningOn = settings.LocalAddress;
+        // What was actually bound, not what should be typed to reach it — the settings
+        // screen shows both, and conflating them is how people end up handing a phone
+        // "0.0.0.0".
+        ListeningOn = $"{settings.Scheme}://{bindAddress}:{settings.Port}";
     }
 
     public async Task StopAsync()

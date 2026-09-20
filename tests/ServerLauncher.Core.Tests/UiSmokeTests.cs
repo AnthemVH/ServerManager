@@ -530,7 +530,6 @@ public sealed class UiSmokeTests : IDisposable
                 UpdateArguments = "+app_update 233780 validate",
                 UpdateTimeoutMinutes = 45,
                 RunUpdateBeforeStart = true,
-                BackupEnabled = true,
                 BackupSourceFolder = folder,
                 BackupDestinationFolder = @"D:\backups",
                 BackupMode = BackupMode.Live,
@@ -579,7 +578,6 @@ public sealed class UiSmokeTests : IDisposable
                 loaded.UpdateArguments.Should().Be(original.UpdateArguments);
                 loaded.UpdateTimeoutMinutes.Should().Be(original.UpdateTimeoutMinutes);
                 loaded.RunUpdateBeforeStart.Should().Be(original.RunUpdateBeforeStart);
-                loaded.BackupEnabled.Should().Be(original.BackupEnabled);
                 loaded.BackupSourceFolder.Should().Be(original.BackupSourceFolder);
                 loaded.BackupDestinationFolder.Should().Be(original.BackupDestinationFolder);
                 loaded.BackupMode.Should().Be(original.BackupMode);
@@ -683,6 +681,42 @@ public sealed class UiSmokeTests : IDisposable
                 window.Settings.ConsoleBufferLines.Should().Be(1234);
                 window.Settings.UpdateRepository.Should().Be("owner/repo");
                 window.Settings.PowerShellPath.Should().Be("pwsh.exe");
+
+                window.Settings.RemoteAccess.Should().NotBeSameAs(original.RemoteAccess,
+                    "the nested hosting settings are edited on a copy too, or cancelling "
+                    + "would still have moved the listener");
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+    }
+
+    [WpfFact]
+    public void SettingsWindow_BindsCleanlyWithTheSiteOnTheNetwork()
+    {
+        // This configuration renders the exposure warning, which the default one does
+        // not — so without it that panel is never exercised.
+        WpfHarness.RunOnUi(() =>
+        {
+            using var collector = new BindingErrorCollector();
+
+            var settings = new AppSettings();
+            settings.RemoteAccess.Enabled = true;
+            settings.RemoteAccess.BindAddress = RemoteAccessSettings.AllInterfacesAddress;
+            settings.RemoteAccess.PublicAddress = "https://servers.example.com";
+
+            var window = (SettingsWindow)Offscreen(new SettingsWindow(settings));
+            try
+            {
+                window.Show();
+                WpfHarness.Pump(window);
+
+                AssertNoBindingErrors(collector, "SettingsWindow with the site published");
+
+                window.Settings.RemoteAccess.IsUnencryptedOnTheNetwork.Should().BeTrue(
+                    "no certificate is set, which is what the warning is about");
             }
             finally
             {

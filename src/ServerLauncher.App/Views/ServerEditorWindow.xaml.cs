@@ -77,7 +77,6 @@ public partial class ServerEditorWindow : Window
 
         RefreshScheduleEmptyState();
 
-        BackupEnabledBox.IsChecked = d.BackupEnabled;
         BackupSourceBox.Text = d.BackupSourceFolder;
         BackupDestBox.Text = d.BackupDestinationFolder;
         BackupModeBox.SelectedItem = d.BackupMode;
@@ -166,7 +165,6 @@ public partial class ServerEditorWindow : Window
         d.ScheduledRestartTime = string.Empty;
         d.BackupScheduleTime = string.Empty;
 
-        d.BackupEnabled = BackupEnabledBox.IsChecked == true;
         d.BackupSourceFolder = BackupSourceBox.Text.Trim();
         d.BackupDestinationFolder = BackupDestBox.Text.Trim();
         d.BackupMode = (BackupMode)(BackupModeBox.SelectedItem ?? BackupMode.SafeStopAndRestart);
@@ -259,12 +257,6 @@ public partial class ServerEditorWindow : Window
             && string.IsNullOrWhiteSpace(BackupDestBox.Text))
         {
             error = "A schedule entry runs a backup, so backups need a destination folder.";
-            return false;
-        }
-
-        if (BackupEnabledBox.IsChecked == true && string.IsNullOrWhiteSpace(BackupDestBox.Text))
-        {
-            error = "Scheduled backups need a destination folder.";
             return false;
         }
 

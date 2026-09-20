@@ -12,7 +12,7 @@ using ServerLauncher.Core.Supervision;
 namespace ServerLauncher.Core.Tests;
 
 /// <summary>
-/// Drives the real API over a real listener on loopback, which is where it lives.
+/// Drives the real API over a real listener on loopback, the default binding.
 /// </summary>
 /// <remarks>
 /// Everything here runs against the same code paths a phone would hit, because the
@@ -64,7 +64,8 @@ public sealed class RemoteApiTests : IAsyncLifetime
             Path.Combine(_root, "audit.log")));
 
         var port = FreePort();
-        // Loopback, so no certificate is needed and the tests stay hermetic.
+        // Loopback and no certificate, so these tests stay hermetic. Binding beyond
+        // loopback has its own fixture below.
         await _server.StartAsync(new RemoteAccessSettings { Enabled = true, Port = port });
 
         _client = new HttpClient { BaseAddress = new Uri($"http://127.0.0.1:{port}") };
@@ -473,5 +474,120 @@ public sealed class RemoteApiTests : IAsyncLifetime
         audit.Should().Contain("Started server");
         audit.Should().Contain("Stopped server");
         audit.Should().Contain("Test Server");
+    }
+}
+
+/// <summary>
+/// Proves the listener really can bind beyond loopback without elevation, which is the
+/// whole reason this uses Kestrel rather than HttpListener: http.sys refuses any prefix
+/// but loopback without a URL reservation made by an administrator, and ServerManager
+/// runs unelevated so it can replace its own executable when updating.
+/// </summary>
+[Collection(ProcessIntegrationCollection.Name)]
+public sealed class NetworkBindingTests : IAsyncLifetime
+{
+    private readonly string _root = Path.Combine(
+        Path.GetTempPath(), "ServerLauncherBindTests", Guid.NewGuid().ToString("N"));
+
+    private ServerManager _manager = null!;
+    private RemoteApiServer _server = null!;
+
+    private static int FreePort()
+    {
+        var probe = new TcpListener(IPAddress.Loopback, 0);
+        probe.Start();
+        var port = ((IPEndPoint)probe.LocalEndpoint).Port;
+        probe.Stop();
+        return port;
+    }
+
+    public Task InitializeAsync()
+    {
+        Directory.CreateDirectory(_root);
+
+        _manager = new ServerManager(new ConfigurationStore(
+            Path.Combine(_root, "servers.json"),
+            Path.Combine(_root, "settings.json")));
+
+        var devices = new DeviceStore(Path.Combine(_root, "devices.json"));
+        _server = new RemoteApiServer(_manager, devices, new PairingService(devices),
+            new RemoteAuditLog(Path.Combine(_root, "audit.log")));
+
+        return Task.CompletedTask;
+    }
+
+    public Task DisposeAsync()
+    {
+        _server.StopAsync().GetAwaiter().GetResult();
+        _manager.Dispose();
+
+        try
+        {
+            if (Directory.Exists(_root))
+            {
+                Directory.Delete(_root, recursive: true);
+            }
+        }
+        catch (IOException)
+        {
+        }
+
+        return Task.CompletedTask;
+    }
+
+    [Fact]
+    public async Task BindingEveryInterfaceSucceedsWithoutElevation()
+    {
+        var port = FreePort();
+
+        await _server.StartAsync(new RemoteAccessSettings
+        {
+            Enabled = true,
+            Port = port,
+            BindAddress = RemoteAccessSettings.AllInterfacesAddress
+        });
+
+        _server.IsRunning.Should().BeTrue();
+        _server.ListeningOn.Should().Be($"http://0.0.0.0:{port}");
+
+        // Reached over loopback, which a wildcard bind also covers. Connecting over the
+        // LAN address would be the same socket and would make the test depend on this
+        // machine's network configuration.
+        using var client = new HttpClient { BaseAddress = new Uri($"http://127.0.0.1:{port}") };
+
+        (await client.GetAsync("/")).StatusCode.Should().Be(HttpStatusCode.OK);
+    }
+
+    [Fact]
+    public async Task ApiCallsAreStillUnauthorisedWhenBoundToTheNetwork()
+    {
+        // The obvious way to get this catastrophically wrong: treat "bound for remote
+        // access" as "already trusted".
+        var port = FreePort();
+
+        await _server.StartAsync(new RemoteAccessSettings
+        {
+            Enabled = true,
+            Port = port,
+            BindAddress = RemoteAccessSettings.AllInterfacesAddress
+        });
+
+        using var client = new HttpClient { BaseAddress = new Uri($"http://127.0.0.1:{port}") };
+
+        (await client.GetAsync("/api/v1/servers")).StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+    }
+
+    [Fact]
+    public async Task AnUnusableBindAddressFailsToStartRatherThanListeningSomewhereElse()
+    {
+        var act = async () => await _server.StartAsync(new RemoteAccessSettings
+        {
+            Enabled = true,
+            Port = FreePort(),
+            BindAddress = "not-an-address"
+        });
+
+        await act.Should().ThrowAsync<InvalidOperationException>();
+        _server.IsRunning.Should().BeFalse();
     }
 }
