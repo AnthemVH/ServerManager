@@ -725,6 +725,240 @@ public sealed class UiSmokeTests : IDisposable
         });
     }
 
+    // --- Weekly schedule ---
+
+    private ServerManager ManagerWithSchedule(out Guid armaId, out ScheduledTask twiceAWeek)
+    {
+        var manager = CreateIsolatedManager();
+        var script = Path.Combine(AppContext.BaseDirectory, "fixtures", "interactive.bat");
+
+        twiceAWeek = new ScheduledTask
+        {
+            Action = ScheduledAction.Restart,
+            Time = "05:00",
+            Days = ScheduleDays.Monday | ScheduleDays.Thursday
+        };
+
+        var arma = manager.Add(new ServerDefinition
+        {
+            Name = "Arma",
+            ScriptPath = script,
+            UpdateScriptPath = script,
+            Schedule =
+            {
+                twiceAWeek,
+                new ScheduledTask { Action = ScheduledAction.RunUpdate, Time = "04:30", Days = ScheduleDays.Monday },
+                new ScheduledTask { Action = ScheduledAction.Stop, Time = "23:00", Days = ScheduleDays.EveryDay, Enabled = false }
+            }
+        });
+
+        manager.Add(new ServerDefinition
+        {
+            Name = "Minecraft",
+            ScriptPath = script,
+            Schedule = { new ScheduledTask { Action = ScheduledAction.Start, Time = "08:00", Days = ScheduleDays.Weekend } }
+        });
+
+        armaId = arma.Id;
+        return manager;
+    }
+
+    [WpfFact]
+    public void ScheduleView_BindsCleanlyWithEntriesOnEveryKindOfDay()
+    {
+        // Multi-day, single-day, every-day, paused and weekend entries all render through
+        // different parts of the card template, so all of them are present here.
+        WpfHarness.RunOnUi(() =>
+        {
+            var manager = ManagerWithSchedule(out _, out _);
+            var viewModel = new MainViewModel(manager);
+            viewModel.SyncServers();
+
+            using var collector = new BindingErrorCollector();
+
+            MainWindow? window = null;
+            try
+            {
+                window = (MainWindow)Offscreen(new MainWindow(viewModel));
+                window.Show();
+
+                viewModel.ShowScheduleCommand.Execute(null);
+                WpfHarness.Pump(window);
+
+                AssertNoBindingErrors(collector, "MainWindow schedule view");
+
+                var monday = viewModel.Schedule.Days.Single(d => d.Day == ScheduleDays.Monday);
+                monday.Entries.Select(e => e.Time).Should().Equal("04:30", "05:00", "23:00");
+
+                var saturday = viewModel.Schedule.Days.Single(d => d.Day == ScheduleDays.Saturday);
+                saturday.Entries.Select(e => e.ServerName).Should().Contain("Minecraft");
+
+                viewModel.Schedule.Days.Count(d => d.IsToday).Should().Be(1);
+                viewModel.Schedule.NextUpText.Should().StartWith("Next:");
+            }
+            finally
+            {
+                if (window is not null)
+                {
+                    window.AllowClose = true;
+                    window.Close();
+                }
+
+                viewModel.Dispose();
+                manager.Dispose();
+            }
+        });
+    }
+
+    [WpfFact]
+    public void OnlyOneViewIsEverShownAtATime()
+    {
+        WpfHarness.RunOnUi(() =>
+        {
+            var manager = CreateIsolatedManager();
+            var viewModel = new MainViewModel(manager);
+
+            try
+            {
+                void ExactlyOne(string when) =>
+                    new[] { viewModel.IsServersVisible, viewModel.IsDashboardVisible, viewModel.IsScheduleVisible }
+                        .Count(v => v).Should().Be(1, when);
+
+                viewModel.IsServersVisible.Should().BeTrue("the servers view is what opens");
+                ExactlyOne("at startup");
+
+                viewModel.ShowScheduleCommand.Execute(null);
+                viewModel.IsScheduleVisible.Should().BeTrue();
+                ExactlyOne("after showing the schedule");
+
+                viewModel.ShowDashboardCommand.Execute(null);
+                viewModel.IsDashboardVisible.Should().BeTrue();
+                ExactlyOne("after showing the dashboard");
+
+                viewModel.ShowServersCommand.Execute(null);
+                ExactlyOne("after going back to servers");
+            }
+            finally
+            {
+                viewModel.Dispose();
+                manager.Dispose();
+            }
+        });
+    }
+
+    [WpfFact]
+    public void RemovingOneDayFromTheBoardIsSavedAndLeavesTheOtherDay()
+    {
+        WpfHarness.RunOnUi(() =>
+        {
+            var manager = ManagerWithSchedule(out var armaId, out var twiceAWeek);
+            var viewModel = new MainViewModel(manager);
+            viewModel.SyncServers();
+
+            try
+            {
+                viewModel.SaveSchedule(armaId, d => d.RemoveScheduleDay(twiceAWeek.Id, ScheduleDays.Monday));
+
+                manager.Find(armaId)!.Definition.Schedule.Single(t => t.Id == twiceAWeek.Id).Days
+                    .Should().Be(ScheduleDays.Thursday);
+
+                viewModel.Schedule.Days.Single(d => d.Day == ScheduleDays.Monday).Entries
+                    .Should().NotContain(e => e.Task.Id == twiceAWeek.Id, "the board refreshes after a change");
+                viewModel.Schedule.Days.Single(d => d.Day == ScheduleDays.Thursday).Entries
+                    .Should().Contain(e => e.Task.Id == twiceAWeek.Id);
+
+                // Saved, not just held in memory: a fresh manager on the same files sees it.
+                manager.Dispose();
+                using var reloaded = CreateIsolatedManager();
+                reloaded.InitialiseAsync().GetAwaiter().GetResult();
+
+                reloaded.Find(armaId)!.Definition.Schedule.Single(t => t.Id == twiceAWeek.Id).Days
+                    .Should().Be(ScheduleDays.Thursday);
+            }
+            finally
+            {
+                viewModel.Dispose();
+                manager.Dispose();
+            }
+        });
+    }
+
+    [WpfFact]
+    public void EditingAnEntryFromTheBoardKeepsItsIdentity()
+    {
+        // The id carries the once-per-day fire guard, so an edit must replace in place.
+        WpfHarness.RunOnUi(() =>
+        {
+            var manager = ManagerWithSchedule(out var armaId, out var twiceAWeek);
+            var viewModel = new MainViewModel(manager);
+            viewModel.SyncServers();
+
+            try
+            {
+                var edited = twiceAWeek.Clone();
+                edited.Time = "06:15";
+                edited.Days = ScheduleDays.Tuesday | ScheduleDays.Friday;
+
+                viewModel.SaveSchedule(armaId, d => d.UpsertScheduledTask(edited));
+
+                var schedule = manager.Find(armaId)!.Definition.Schedule;
+                schedule.Should().HaveCount(3, "an edit is not an addition");
+
+                var saved = schedule.Single(t => t.Id == twiceAWeek.Id);
+                saved.Time.Should().Be("06:15");
+                saved.Days.Should().Be(ScheduleDays.Tuesday | ScheduleDays.Friday);
+            }
+            finally
+            {
+                viewModel.Dispose();
+                manager.Dispose();
+            }
+        });
+    }
+
+    [WpfFact]
+    public void ScheduleEntryWindow_BindsCleanlyAndRefusesWhatCouldNeverRun()
+    {
+        WpfHarness.RunOnUi(() =>
+        {
+            using var collector = new BindingErrorCollector();
+
+            var withUpdate = new ServerDefinition { Name = "Arma", UpdateScriptPath = @"C:\u.bat" };
+            var withoutUpdate = new ServerDefinition { Name = "Minecraft" };
+            var servers = new[] { withUpdate, withoutUpdate };
+
+            var task = new ScheduledTask
+            {
+                Action = ScheduledAction.RunUpdate,
+                Time = "04:00",
+                Days = ScheduleDays.Sunday
+            };
+
+            var window = (ScheduleEntryWindow)Offscreen(
+                new ScheduleEntryWindow(servers, withoutUpdate.Id, task, isNew: true));
+
+            try
+            {
+                window.Show();
+                WpfHarness.Pump(window);
+
+                AssertNoBindingErrors(collector, "ScheduleEntryWindow");
+
+                window.SelectedServer.Should().BeSameAs(withoutUpdate, "the requested server is preselected");
+
+                window.TryValidate(out var error).Should().BeFalse(
+                    "an update entry on a server with no update script would do nothing at 4am");
+                error.Should().Contain("no update script");
+
+                window.Task.Id.Should().Be(task.Id, "the dialog edits the same entry, not a new one");
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+    }
+
     public void Dispose()
     {
         try

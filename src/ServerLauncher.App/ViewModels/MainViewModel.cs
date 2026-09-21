@@ -34,12 +34,28 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     private bool _autoScroll = true;
 
     /// <summary>
-    /// Dashboard replaces the list/detail split so every server is visible at once.
-    /// Off at startup: the servers view is where anything is actually done, and opening
-    /// on a summary meant an extra click before every task.
+    /// Which of the three views fills the window. Servers at startup: it is where anything
+    /// is actually done, and opening on a summary meant an extra click before every task.
     /// </summary>
     [ObservableProperty]
-    private bool _isDashboardVisible;
+    [NotifyPropertyChangedFor(nameof(IsDashboardVisible), nameof(IsServersVisible), nameof(IsScheduleVisible))]
+    private MainView _currentView = MainView.Servers;
+
+    /// <summary>Every server on one screen.</summary>
+    public bool IsDashboardVisible => CurrentView == MainView.Dashboard;
+
+    /// <summary>The list, console and settings for one server at a time.</summary>
+    public bool IsServersVisible => CurrentView == MainView.Servers;
+
+    /// <summary>Every server's schedule laid out as one week.</summary>
+    public bool IsScheduleVisible => CurrentView == MainView.Schedule;
+
+    /// <summary>The weekly schedule view.</summary>
+    public ScheduleBoardViewModel Schedule { get; } = new();
+
+    // The minute the schedule was last rebuilt, so "today" and "next" move on by
+    // themselves without rebuilding the columns every second.
+    private DateTime _scheduleRefreshedFor;
 
     // --- Updates ---
 
@@ -105,6 +121,11 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
             RefreshAppUptime();
             RefreshTotals();
+
+            if (IsScheduleVisible && StartOfMinute(DateTime.Now) != _scheduleRefreshedFor)
+            {
+                RefreshSchedule();
+            }
         };
         _uptimeTimer.Start();
     }
@@ -148,8 +169,23 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         OnPropertyChanged(nameof(HasServers));
         RefreshTotals();
 
+        // A server added, removed, renamed or edited can change any day's column.
+        RefreshSchedule();
+
         SelectedServer ??= Servers.FirstOrDefault();
     }
+
+    /// <summary>Rebuilds the weekly view from every server's current schedule.</summary>
+    public void RefreshSchedule()
+    {
+        var now = DateTime.Now;
+        _scheduleRefreshedFor = StartOfMinute(now);
+
+        Schedule.Refresh(_manager.Instances.Select(i => i.Definition).ToList(), now);
+    }
+
+    private static DateTime StartOfMinute(DateTime value) =>
+        value.AddTicks(-(value.Ticks % TimeSpan.TicksPerMinute));
 
     // The two-parameter overload is the one that hands us the previous selection;
     // the single-parameter form receives the incoming value instead.
@@ -505,10 +541,158 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     private void ClearConsole() => SelectedServer?.ConsoleLines.Clear();
 
     [RelayCommand]
-    private void ShowDashboard() => IsDashboardVisible = true;
+    private void ShowDashboard() => CurrentView = MainView.Dashboard;
 
     [RelayCommand]
-    private void ShowServers() => IsDashboardVisible = false;
+    private void ShowServers() => CurrentView = MainView.Servers;
+
+    [RelayCommand]
+    private void ShowSchedule()
+    {
+        RefreshSchedule();
+        CurrentView = MainView.Schedule;
+    }
+
+    // --- Weekly schedule ---
+
+    [RelayCommand]
+    private void AddScheduleEntry(ScheduleDayColumn? column)
+    {
+        var servers = _manager.Instances.Select(i => i.Definition).ToList();
+        if (servers.Count == 0)
+        {
+            StatusMessage = "Add a server first. Schedule entries belong to a server.";
+            return;
+        }
+
+        var day = column?.Day ?? ScheduledTask.ToFlag(DateTime.Now.DayOfWeek);
+        var serverId = SelectedServer?.Id ?? servers[0].Id;
+
+        var dialog = new ScheduleEntryWindow(servers, serverId, new ScheduledTask
+        {
+            Action = ScheduledAction.Restart,
+            Time = "05:00",
+            Days = day
+        }, isNew: true)
+        {
+            Owner = Application.Current.MainWindow
+        };
+
+        if (dialog.ShowDialog() != true || dialog.SelectedServer is not { } target)
+        {
+            return;
+        }
+
+        var task = dialog.Task;
+        SaveSchedule(target.Id, d => d.UpsertScheduledTask(task));
+
+        StatusMessage = "Scheduled: " + task.Describe() + " for " + target.Name + ".";
+    }
+
+    [RelayCommand]
+    private void EditScheduleEntry(ScheduleEntryItem? item)
+    {
+        if (item is null)
+        {
+            return;
+        }
+
+        var servers = _manager.Instances.Select(i => i.Definition).ToList();
+
+        var dialog = new ScheduleEntryWindow(servers, item.ServerId, item.Task, isNew: false)
+        {
+            Owner = Application.Current.MainWindow
+        };
+
+        if (dialog.ShowDialog() != true || dialog.SelectedServer is not { } target)
+        {
+            return;
+        }
+
+        var task = dialog.Task;
+
+        if (target.Id != item.ServerId)
+        {
+            // Moved to another server: taken off the old one first, so a save that fails
+            // halfway leaves the entry missing rather than running twice.
+            SaveSchedule(item.ServerId, d => d.RemoveScheduledTask(task.Id));
+        }
+
+        SaveSchedule(target.Id, d => d.UpsertScheduledTask(task));
+        StatusMessage = "Schedule entry updated.";
+    }
+
+    [RelayCommand]
+    private void DeleteScheduleEntry(ScheduleEntryItem? item)
+    {
+        if (item is null)
+        {
+            return;
+        }
+
+        var what = item.ActionText + " " + item.ServerName + " at " + item.Time;
+
+        if (item.RunsOnOtherDays)
+        {
+            // An entry on several days shows up in several columns, and deleting it from
+            // one of them could reasonably mean either thing. Ask rather than guess.
+            var choice = ChoiceWindow.Ask(
+                Application.Current.MainWindow,
+                "Delete schedule entry",
+                "\u201C" + what + "\u201D runs on " + ScheduledTask.DescribeDays(item.Task.Days) + ".\n\n"
+                + "Remove it from " + item.DayName + " only, or delete it on every day?",
+                new ChoiceWindow.Choice(item.DayName + " only"),
+                new ChoiceWindow.Choice("Every day", IsDanger: true));
+
+            if (choice == 0)
+            {
+                SaveSchedule(item.ServerId, d => d.RemoveScheduleDay(item.Task.Id, item.Day));
+                StatusMessage = "Removed " + what + " from " + item.DayName + ".";
+            }
+            else if (choice == 1)
+            {
+                SaveSchedule(item.ServerId, d => d.RemoveScheduledTask(item.Task.Id));
+                StatusMessage = "Deleted " + what + ".";
+            }
+
+            return;
+        }
+
+        var confirm = MessageBox.Show(
+            "Delete " + what + " on " + item.DayName + "?",
+            "Delete schedule entry",
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Question);
+
+        if (confirm == MessageBoxResult.Yes)
+        {
+            SaveSchedule(item.ServerId, d => d.RemoveScheduledTask(item.Task.Id));
+            StatusMessage = "Deleted " + what + ".";
+        }
+    }
+
+    /// <summary>
+    /// Applies a schedule change to one server through the same path as the server
+    /// editor: edit a copy, hand it to the manager, which persists it.
+    /// </summary>
+    public void SaveSchedule(Guid serverId, Action<ServerDefinition> change)
+    {
+        ArgumentNullException.ThrowIfNull(change);
+
+        var instance = _manager.Find(serverId);
+        if (instance is null)
+        {
+            return;
+        }
+
+        var copy = instance.Definition.Clone();
+        change(copy);
+
+        _manager.Update(copy);
+        Servers.FirstOrDefault(s => s.Id == serverId)?.NotifyDefinitionChanged();
+
+        RefreshSchedule();
+    }
 
     /// <summary>Jumps from a dashboard card to that server's console and settings.</summary>
     [RelayCommand]
@@ -520,7 +704,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         }
 
         SelectedServer = server;
-        IsDashboardVisible = false;
+        CurrentView = MainView.Servers;
     }
 
     // --- Updates ---
@@ -722,4 +906,12 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             server.Dispose();
         }
     }
+}
+
+/// <summary>The views the main window can show.</summary>
+public enum MainView
+{
+    Servers,
+    Dashboard,
+    Schedule
 }

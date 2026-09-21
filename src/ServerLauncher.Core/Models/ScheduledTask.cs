@@ -106,7 +106,7 @@ public sealed class ScheduledTask
         ScheduledAction.Start => "Start",
         ScheduledAction.Stop => "Stop",
         ScheduledAction.Restart => "Restart",
-        ScheduledAction.RunUpdate => "Run update script",
+        ScheduledAction.RunUpdate => "Run update",
         ScheduledAction.Backup => "Back up",
         _ => action.ToString()
     };

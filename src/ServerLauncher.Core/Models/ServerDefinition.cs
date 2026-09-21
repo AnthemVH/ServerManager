@@ -158,6 +158,52 @@ public sealed class ServerDefinition
     };
 
     /// <summary>
+    /// Replaces the task with the same id, or adds it if there is none. Replacing in place
+    /// keeps the id, which is what the once-per-day fire guard tracks.
+    /// </summary>
+    public void UpsertScheduledTask(ScheduledTask task)
+    {
+        ArgumentNullException.ThrowIfNull(task);
+
+        var index = Schedule.FindIndex(t => t.Id == task.Id);
+        if (index >= 0)
+        {
+            Schedule[index] = task;
+        }
+        else
+        {
+            Schedule.Add(task);
+        }
+    }
+
+    /// <summary>Removes a task entirely.</summary>
+    /// <returns>False if there was no such task.</returns>
+    public bool RemoveScheduledTask(Guid taskId) => Schedule.RemoveAll(t => t.Id == taskId) > 0;
+
+    /// <summary>
+    /// Takes one day off a task, leaving its other days alone. A task left with no days
+    /// is removed, since it could never fire and would only be clutter.
+    /// </summary>
+    /// <returns>False if there was no such task.</returns>
+    public bool RemoveScheduleDay(Guid taskId, ScheduleDays day)
+    {
+        var task = Schedule.FirstOrDefault(t => t.Id == taskId);
+        if (task is null)
+        {
+            return false;
+        }
+
+        task.Days &= ~day;
+
+        if (task.Days == ScheduleDays.None)
+        {
+            Schedule.Remove(task);
+        }
+
+        return true;
+    }
+
+    /// <summary>
     /// Moves the old single daily restart and backup times into <see cref="Schedule"/>.
     /// Idempotent, so running it on every load is safe.
     /// </summary>

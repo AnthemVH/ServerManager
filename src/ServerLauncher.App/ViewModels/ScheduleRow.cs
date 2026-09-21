@@ -102,6 +102,31 @@ public sealed class ScheduleRow : INotifyPropertyChanged
         set => SetDay(ScheduleDays.Sunday, value);
     }
 
+    /// <summary>All the days at once, for the "every day" and "weekdays" shortcuts.</summary>
+    public ScheduleDays Days
+    {
+        get => _days;
+        set
+        {
+            if (_days == value)
+            {
+                return;
+            }
+
+            _days = value;
+
+            Raise(nameof(Days));
+            Raise(nameof(Monday));
+            Raise(nameof(Tuesday));
+            Raise(nameof(Wednesday));
+            Raise(nameof(Thursday));
+            Raise(nameof(Friday));
+            Raise(nameof(Saturday));
+            Raise(nameof(Sunday));
+            Raise(nameof(Summary));
+        }
+    }
+
     /// <summary>A plain-words restatement of the row, so a misread checkbox is visible.</summary>
     public string Summary => ToTask().Describe();
 
@@ -129,6 +154,7 @@ public sealed class ScheduleRow : INotifyPropertyChanged
 
         _days = updated;
         Raise(property);
+        Raise(nameof(Days));
         Raise(nameof(Summary));
     }
 

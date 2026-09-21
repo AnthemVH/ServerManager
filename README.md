@@ -47,6 +47,12 @@ outage. *Live* mode archives while running and skips files the server holds lock
 (start, stop, restart, run the update script, back up), at what time, and on which days.
 Twice a week is one entry with two days ticked.
 
+**Weekly schedule** — every server's entries on one screen, a column per day with today
+highlighted and the next thing due shown at the top. Add an entry from any day's **+**,
+edit or delete it from its card. Deleting an entry that runs on several days asks whether
+you mean just that day or all of them. Paused entries stay on the board, dimmed, so they
+can be turned back on.
+
 **Update scripts** — a second script per server that updates the game or its mods. Run it
 from the toolbar, on a schedule, or before every start. If the server is up it is stopped
 first, because a mod updater cannot overwrite files the server holds open, and started

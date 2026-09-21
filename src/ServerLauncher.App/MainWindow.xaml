@@ -46,11 +46,21 @@
                             Command="{Binding ShowDashboardCommand}" />
                     <Button Content="Servers" Style="{StaticResource ToolButton}"
                             Command="{Binding ShowServersCommand}" />
+                    <Button Content="Schedule" Style="{StaticResource ToolButton}"
+                            Command="{Binding ShowScheduleCommand}"
+                            ToolTip="Every server's scheduled starts, stops, restarts, updates and backups, by day of the week" />
                     <Rectangle Width="1" Fill="{StaticResource Border.Subtle}" Margin="6,2,12,2" />
                 </StackPanel>
 
                 <StackPanel Orientation="Horizontal"
-                            Visibility="{Binding IsDashboardVisible, Converter={StaticResource BoolToVisibility}, ConverterParameter=Invert}">
+                            Visibility="{Binding IsScheduleVisible, Converter={StaticResource BoolToVisibility}}">
+                    <Button Content="+  Add entry" Style="{StaticResource PrimaryButton}"
+                            Command="{Binding AddScheduleEntryCommand}"
+                            ToolTip="Add a schedule entry, starting on today" />
+                </StackPanel>
+
+                <StackPanel Orientation="Horizontal"
+                            Visibility="{Binding IsServersVisible, Converter={StaticResource BoolToVisibility}}">
                     <Button Content="▶  Start" Style="{StaticResource PrimaryButton}"
                             Command="{Binding StartCommand}"
                             IsEnabled="{Binding SelectedServer.CanStart, FallbackValue=False}" />
@@ -112,7 +122,7 @@
 
         <!-- Body: servers view -->
         <Grid Grid.Row="2"
-              Visibility="{Binding IsDashboardVisible, Converter={StaticResource BoolToVisibility}, ConverterParameter=Invert}">
+              Visibility="{Binding IsServersVisible, Converter={StaticResource BoolToVisibility}}">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="280" MinWidth="200" />
                 <ColumnDefinition Width="Auto" />
@@ -552,6 +562,137 @@
                         </ItemsControl.ItemTemplate>
                     </ItemsControl>
                 </StackPanel>
+            </ScrollViewer>
+        </Grid>
+
+        <!-- Body: weekly schedule -->
+        <Grid Grid.Row="2" Background="{StaticResource Bg.Window}"
+              Visibility="{Binding IsScheduleVisible, Converter={StaticResource BoolToVisibility}}">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+            </Grid.RowDefinitions>
+
+            <DockPanel Grid.Row="0" Margin="18,14,18,6">
+                <TextBlock DockPanel.Dock="Left" Text="Weekly schedule" FontSize="15" FontWeight="SemiBold"
+                           VerticalAlignment="Center" Margin="0,0,18,0" />
+                <TextBlock Text="{Binding Schedule.NextUpText}" Foreground="{StaticResource Fg.Secondary}"
+                           VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+            </DockPanel>
+
+            <!-- No horizontal scrolling: inside a horizontally scrolling viewer the columns size
+                 to their content rather than to the window, which pushed Sunday off the edge.
+                 Constrained to the viewport, the seven columns always share the width, and a
+                 long action name trims with an ellipsis instead. -->
+            <ScrollViewer Grid.Row="1" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto"
+                          Padding="12,4,12,12">
+                <ItemsControl ItemsSource="{Binding Schedule.Days}">
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <UniformGrid Rows="1" Columns="7" />
+                        </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <Border Margin="4" CornerRadius="6" BorderThickness="1" VerticalAlignment="Stretch">
+                                <Border.Style>
+                                    <Style TargetType="Border">
+                                        <Setter Property="Background" Value="{StaticResource Bg.Panel}" />
+                                        <Setter Property="BorderBrush" Value="{StaticResource Border.Subtle}" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding IsToday}" Value="True">
+                                                <Setter Property="BorderBrush" Value="{StaticResource Accent}" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Border.Style>
+
+                                <DockPanel>
+                                    <!-- Day heading -->
+                                    <Border DockPanel.Dock="Top" Padding="10,8,8,8"
+                                            BorderBrush="{StaticResource Border.Subtle}" BorderThickness="0,0,0,1">
+                                        <DockPanel>
+                                            <Button DockPanel.Dock="Right" Content="+" Style="{StaticResource ToolButton}"
+                                                    Padding="9,1" FontSize="13" Margin="0" VerticalAlignment="Center"
+                                                    ToolTip="Add an entry on this day"
+                                                    Command="{Binding DataContext.AddScheduleEntryCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                    CommandParameter="{Binding}" />
+                                            <StackPanel>
+                                                <TextBlock Text="{Binding Name}" FontWeight="SemiBold" />
+                                                <StackPanel Orientation="Horizontal" Margin="0,1,0,0">
+                                                    <TextBlock Text="Today  " FontSize="11" Foreground="{StaticResource Accent.Hover}"
+                                                               Visibility="{Binding IsToday, Converter={StaticResource BoolToVisibility}}" />
+                                                    <TextBlock Text="{Binding CountText}" FontSize="11"
+                                                               Foreground="{StaticResource Fg.Secondary}" />
+                                                </StackPanel>
+                                            </StackPanel>
+                                        </DockPanel>
+                                    </Border>
+
+                                    <StackPanel Margin="6,6,6,4">
+                                        <TextBlock Text="Nothing scheduled" Style="{StaticResource Hint}" Margin="4,4,0,0"
+                                                   Visibility="{Binding IsEmpty, Converter={StaticResource BoolToVisibility}}" />
+
+                                        <ItemsControl ItemsSource="{Binding Entries}">
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate>
+                                                    <Border Margin="0,0,0,6" Padding="9,7" CornerRadius="4"
+                                                            BorderThickness="1" ToolTip="{Binding Summary}">
+                                                        <Border.Style>
+                                                            <Style TargetType="Border">
+                                                                <Setter Property="Background" Value="{StaticResource Bg.Elevated}" />
+                                                                <Setter Property="BorderBrush" Value="{StaticResource Border.Subtle}" />
+                                                                <Setter Property="Opacity" Value="1" />
+                                                                <Style.Triggers>
+                                                                    <DataTrigger Binding="{Binding IsActive}" Value="False">
+                                                                        <Setter Property="Opacity" Value="0.55" />
+                                                                    </DataTrigger>
+                                                                </Style.Triggers>
+                                                            </Style>
+                                                        </Border.Style>
+
+                                                        <StackPanel>
+                                                            <DockPanel>
+                                                                <TextBlock DockPanel.Dock="Left" Text="{Binding Time}"
+                                                                           FontFamily="{StaticResource Font.Mono}" FontWeight="SemiBold"
+                                                                           Margin="0,0,8,0" />
+                                                                <TextBlock Text="{Binding ActionText}" TextTrimming="CharacterEllipsis" />
+                                                            </DockPanel>
+
+                                                            <TextBlock Text="{Binding ServerName}" FontSize="11.5" Margin="0,2,0,0"
+                                                                       Foreground="{StaticResource Fg.Secondary}"
+                                                                       TextTrimming="CharacterEllipsis" />
+
+                                                            <TextBlock Text="{Binding OtherDaysText}" FontSize="11" Margin="0,2,0,0"
+                                                                       Foreground="{StaticResource Fg.Muted}" TextWrapping="Wrap"
+                                                                       Visibility="{Binding RunsOnOtherDays, Converter={StaticResource BoolToVisibility}}" />
+
+                                                            <TextBlock Text="{Binding StatusText}" FontSize="11" Margin="0,2,0,0"
+                                                                       Foreground="{StaticResource Fg.Muted}" FontStyle="Italic"
+                                                                       Visibility="{Binding IsActive, Converter={StaticResource BoolToVisibility}, ConverterParameter=Invert}" />
+
+                                                            <StackPanel Orientation="Horizontal" Margin="0,7,0,0">
+                                                                <Button Content="Edit" Style="{StaticResource ToolButton}"
+                                                                        Padding="9,2" FontSize="11"
+                                                                        Command="{Binding DataContext.EditScheduleEntryCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                                        CommandParameter="{Binding}" />
+                                                                <Button Content="Delete" Style="{StaticResource DangerButton}"
+                                                                        Padding="9,2" FontSize="11" Margin="0"
+                                                                        Command="{Binding DataContext.DeleteScheduleEntryCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                                        CommandParameter="{Binding}" />
+                                                            </StackPanel>
+                                                        </StackPanel>
+                                                    </Border>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                    </StackPanel>
+                                </DockPanel>
+                            </Border>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
             </ScrollViewer>
         </Grid>
 
